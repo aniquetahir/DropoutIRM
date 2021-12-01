@@ -100,6 +100,7 @@ class ERM(Algorithm):
         )
 
     def update(self, minibatches, unlabeled=None):
+        print(len(minibatches[0]))
         all_x = torch.cat([x for x,y in minibatches])
         all_y = torch.cat([y for x,y in minibatches])
         loss = F.cross_entropy(self.predict(all_x), all_y)
@@ -301,6 +302,46 @@ class CDANN(AbstractDANN):
     def __init__(self, input_shape, num_classes, num_domains, hparams):
         super(CDANN, self).__init__(input_shape, num_classes, num_domains,
             hparams, conditional=True, class_balance=True)
+
+
+class BranchNetwork(torch.nn.Module):
+    def __init__(self, featurizers):
+        super(BranchNetwork, self).__init__()
+        self.featurizers = featurizers
+
+    def forward(self, x):
+        latent_embeddings = [f(x) for f in self.featurizers]
+        return latent_embeddings
+
+
+class BranchOOD(ERM):
+    """Branch Encoder classification"""
+    def __init__(self, input_shape, num_classes, num_domains, hparams):
+        super(BranchOOD, self).__init__(input_shape, num_classes, num_domains, hparams)
+        self.featurizers = []
+        for i in range(num_domains):
+            self.featurizers.append(networks.Featurizer(input_shape, self.hparams))
+
+        self.classifier = networks.Classifier(
+            self.featurizers[0].n_outputs,
+            num_classes,
+            self.hparams['nonlinear_classifier']
+        )
+
+        self.branch_network = BranchNetwork(self.featurizers)
+        # self.register_buffer('update_count', torch.tensor([0]))
+
+
+    def update(self, minibatches, unlabeled=None):
+        device = 'cuda' if minibatches[0][0].is_cuda else 'cpu'
+
+
+        raise NotImplementedError
+
+    def predict(self, x):
+        raise NotImplementedError
+        # pass
+
 
 
 class IRM(ERM):
