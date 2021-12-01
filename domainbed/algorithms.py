@@ -305,13 +305,18 @@ class CDANN(AbstractDANN):
 
 
 class BranchNetwork(torch.nn.Module):
-    def __init__(self, featurizers):
+    def __init__(self, featurizers, classifier):
         super(BranchNetwork, self).__init__()
         self.featurizers = featurizers
+        self.num_featurizers = len(featurizers)
+        self.classifier = classifier
 
     def forward(self, x):
-        latent_embeddings = [f(x) for f in self.featurizers]
-        return latent_embeddings
+        env_logits = []
+        for i, f in enumerate(self.featurizers):
+            env_logits.append(self.classifier(self.featurizers[i](x[i])))
+        logits = torch.vstack(env_logits)
+        return logits
 
 
 class BranchOOD(ERM):
@@ -321,19 +326,23 @@ class BranchOOD(ERM):
         self.featurizers = []
         for i in range(num_domains):
             self.featurizers.append(networks.Featurizer(input_shape, self.hparams))
-
         self.classifier = networks.Classifier(
             self.featurizers[0].n_outputs,
             num_classes,
             self.hparams['nonlinear_classifier']
         )
 
-        self.branch_network = BranchNetwork(self.featurizers)
-        # self.register_buffer('update_count', torch.tensor([0]))
+        self.network = BranchNetwork(self.featurizers, self.classifier)
+        self.optimizer = torch.optim.AdamW(
+            self.network.parameters(),
+            lr = self.hparams['lr'],
+            weight_decay = self.hparams['weight_decay']
+        )
 
 
     def update(self, minibatches, unlabeled=None):
         device = 'cuda' if minibatches[0][0].is_cuda else 'cpu'
+
 
 
         raise NotImplementedError
