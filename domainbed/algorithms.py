@@ -46,6 +46,7 @@ ALGORITHMS = [
     'TRM',
     'IB_ERM',
     'IB_IRM',
+    'BranchOOD'
 ]
 
 def get_algorithm_class(algorithm_name):
@@ -342,10 +343,38 @@ class BranchOOD(ERM):
 
     def update(self, minibatches, unlabeled=None):
         device = 'cuda' if minibatches[0][0].is_cuda else 'cpu'
+        x_batches = torch.stack([x for x, y in minibatches])
+        all_y = torch.cat([y for x, y in minibatches])
+        cross_entropy_loss = F.cross_entropy(self.network(x_batches), all_y)
+        # Calculate the encoder param variance loss
+        variances = []
+        encoders_params = []
+        for f in self.network.featurizers:
+            ft_params = []
+            for p in f.parameters():
+                ft_params.append(p)
+            encoders_params.append(ft_params)
+
+        for layer_i in range(len(encoders_params[0])):
+            layer_params = []
+            for ft_index, ft_params in enumerate(encoders_params):
+                layer_params.append(ft_params[layer_i])
+            variances.append(torch.var(torch.stack(layer_params)))
+        total_param_variance = torch.mean(variances)
 
 
+        # Accuracy variance loss
 
-        raise NotImplementedError
+
+        #
+        # TODO add loss term with reduction in variance between model weights/bias
+        #  and prediction accuracy across different environments
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return {'loss': loss.item()}
 
     def predict(self, x):
         raise NotImplementedError
