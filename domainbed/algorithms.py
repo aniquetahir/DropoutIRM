@@ -340,6 +340,12 @@ class BranchOOD(ERM):
             weight_decay = self.hparams['weight_decay']
         )
 
+    @staticmethod
+    def mean_accuracy(logits, y):
+        correct = logits.argmax(1).eq(y).float().sum()
+        total = float(logits.size(0))
+        return correct/total
+
 
     def update(self, minibatches, unlabeled=None):
         device = 'cuda' if minibatches[0][0].is_cuda else 'cpu'
@@ -360,13 +366,22 @@ class BranchOOD(ERM):
             for ft_index, ft_params in enumerate(encoders_params):
                 layer_params.append(ft_params[layer_i])
             variances.append(torch.var(torch.stack(layer_params)))
-        total_param_variance = torch.mean(variances)
-
+        total_param_variance = torch.mean(torch.stack(variances))
 
         # Accuracy variance loss
+        # Get the first encoder
+        inference_featurizer = self.featurizers[0]
+        # For each environment
+        environment_accuracies = []
+        for i, batch in enumerate(minibatches):
+            x_batch, y_batch = batch
+            logits = self.network.classifier(inference_featurizer(x_batch))
+            environment_accuracies.append(self.mean_accuracy(logits, y_batch))
+        # Find the mean accuracy
+        accuracy_var = torch.var(torch.stack(environment_accuracies))
 
-
-        #
+        loss = cross_entropy_loss + self.hparams['branch_alpha'] * total_param_variance + \
+               self.hparams['branch_beta'] * accuracy_var
         # TODO add loss term with reduction in variance between model weights/bias
         #  and prediction accuracy across different environments
 
@@ -377,9 +392,9 @@ class BranchOOD(ERM):
         return {'loss': loss.item()}
 
     def predict(self, x):
-        raise NotImplementedError
-        # pass
-
+        inference_encoder = self.network.featurizers[0]
+        inference_classifier = self.network.classifier
+        return inference_classifier(inference_encoder(x))
 
 
 class IRM(ERM):
