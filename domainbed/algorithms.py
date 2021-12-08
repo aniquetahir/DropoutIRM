@@ -101,7 +101,7 @@ class ERM(Algorithm):
         )
 
     def update(self, minibatches, unlabeled=None):
-        print(len(minibatches[0]))
+        # print(len(minibatches[0]))
         all_x = torch.cat([x for x,y in minibatches])
         all_y = torch.cat([y for x,y in minibatches])
         loss = F.cross_entropy(self.predict(all_x), all_y)
@@ -174,6 +174,73 @@ class Fish(Algorithm):
 
     def predict(self, x):
         return self.network(x)
+
+
+
+class ContextNetwork(nn.Module):
+    def __init__(self, input_shape, num_env_feats, num_classes, hparams):
+        super(ContextNetwork, self).__init__(input_shape)
+        self.featurizer = networks.Featurizer(input_shape, hparams)
+        self. classifier = networks.Classifier(
+            self.featurizer.n_outputs + num_env_feats,
+            num_classes,
+            hparams['nonlinear_classifier']
+        )
+
+    def forward(self, x, env_fts):
+        data_features = self.featurizer(x)
+        all_features = torch.cat([data_features, env_fts])
+        preds = self.classifier(all_features)
+        return preds
+
+
+class ContextERM(ERM):
+    """Contextual Empiracle Risk Minimization"""
+    def __init__(self, input_shape, num_classes, num_domains, hparams):
+        super(ContextERM, self).__init__(input_shape, num_classes, num_domains, hparams)
+        flattened_input_shape = torch.prod(torch.tensor(input_shape[1:])).item()
+        num_hidden_features = 64
+        self.environment_detector = torch.nn.GRU(input_size=flattened_input_shape,
+                                                 hidden_size=num_hidden_features,
+                                                 num_layers=2)
+        self.environment_predictor = torch.nn.Linear(num_hidden_features, num_domains)
+        self.network = ContextNetwork(input_shape, num_hidden_features, num_classes, hparams)
+
+
+    def update(self, minibatches, unlabeled=None):
+        num_train_envs = len(minibatches)
+
+        # For each training environment
+        gt_envs = []
+        pred_envs = []
+        env_fts = []
+        for i, env_batch in minibatches:
+            # Get the batch data
+            x, _  = env_batch
+            # environment predictions = environment id
+            gt = torch.ones(x.shape[0]) * i
+            m_env_feats = self.environment_detector(x)
+            env_fts.append(m_env_feats)
+            preds = self.environment_predictor(m_env_feats)
+            gt_envs.append(gt)
+            pred_envs.append(preds)
+
+        loss_env_predictor = F.cross_entropy(torch.cat(pred_envs), torch.cat(gt_envs))
+
+        # Train the normal erm featurizer
+        env_fts = torch.cat(env_fts)
+        all_x = torch.cat([x for x, y in minibatches])
+        all_y = torch.cat([y for x, y in minibatches])
+        loss_label_predictor = F.cross_entropy(self.network(all_x, env_fts), all_y)
+
+        total_loss = torch.cat([loss_env_predictor, loss_label_predictor])
+
+        self.optimizer.zero_grad()
+        total_loss.backward()
+        self.optimizer.step()
+
+        return {'loss': total_loss.item()}
+
 
 
 class ARM(ERM):
