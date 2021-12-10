@@ -190,7 +190,7 @@ class ContextNetwork(nn.Module):
 
     def forward(self, x, env_fts):
         data_features = self.featurizer(x)
-        all_features = torch.cat([data_features, env_fts])
+        all_features = torch.hstack([data_features, env_fts])
         preds = self.classifier(all_features)
         return preds
 
@@ -215,34 +215,49 @@ class ContextERM(ERM):
         gt_envs = []
         pred_envs = []
         env_fts = []
+        seq_importances = []
         for i, env_batch in enumerate(minibatches):
             # Get the batch data
             x, _  = env_batch
             flat_x = torch.flatten(x, start_dim=1)
+            batch_len = len(x)
             # environment predictions = environment id
-            gt = i
+            gt = torch.ones(batch_len) * i
+            # Since only 1 batch is being used, we hard code 1 as the batch size
             reshaped_x = flat_x.reshape(torch.cat([torch.tensor([1]), torch.tensor(flat_x.shape)]).tolist())
-            m_env_feats = self.environment_detector(reshaped_x)[1][1].flatten()
-            env_fts.append(m_env_feats)
+            # TODO Use the output states to predict the environment for each sample
+            m_env_feats = self.environment_detector(reshaped_x)[0][0]
+            # m_env_feats = self.environment_detector(reshaped_x)[1][1].flatten()
+            env_fts.append(torch.ones(batch_len, 1) * m_env_feats[-1]) # The prediction for the last
             preds = self.environment_predictor(m_env_feats)
             gt_envs.append(gt)
             pred_envs.append(preds)
+            seq_importances.append(torch.linspace(0, 1, batch_len))
 
-        loss_env_predictor = F.cross_entropy(torch.stack(pred_envs), torch.tensor(gt_envs))
+        loss_env_predictor = F.cross_entropy(torch.vstack(pred_envs), torch.cat(gt_envs).type(torch.long))
 
         # Train the normal erm featurizer
-        env_fts = torch.stack(env_fts)
+        env_fts = torch.vstack(env_fts)
         all_x = torch.cat([x for x, y in minibatches])
         all_y = torch.cat([y for x, y in minibatches])
         loss_label_predictor = F.cross_entropy(self.network(all_x, env_fts), all_y)
 
-        total_loss = torch.cat([loss_env_predictor, loss_label_predictor])
+        total_loss = loss_env_predictor + loss_label_predictor
 
         self.optimizer.zero_grad()
         total_loss.backward()
         self.optimizer.step()
 
         return {'loss': total_loss.item()}
+
+    def predict(self, x):
+        flat_x = torch.flatten(x, start_dim=1)
+        reshaped_x = flat_x.reshape(torch.cat([torch.tensor([1]), torch.tensor(flat_x.shape)]).tolist())
+        m_env_feats = self.environment_detector(reshaped_x)[0][0]
+        # env_preds = self.environment_predictor(m_env_feats)
+        return self.network(x, m_env_feats)
+
+        pass
 
 
 
