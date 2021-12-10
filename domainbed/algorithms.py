@@ -207,9 +207,14 @@ class ContextERM(ERM):
         self.environment_predictor = torch.nn.Linear(num_hidden_features, num_domains)
         self.complete_environment_predictor = torch.nn.Sequential(self.environment_detector, self.environment_predictor)
         self.network = ContextNetwork(input_shape, num_hidden_features, num_classes, hparams)
-        self.optimizer = list(self.environment_detector.parameters()) + \
+        all_params = list(self.environment_detector.parameters()) + \
                          list(self.environment_predictor.parameters()) + \
                          list(self.network.parameters())
+        self.optimizer = torch.optim.Adam(
+            all_params,
+            lr=self.hparams['lr'],
+            weight_decay=self.hparams['weight_decay']
+        )
 
 
 
