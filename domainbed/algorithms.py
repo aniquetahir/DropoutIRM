@@ -1,4 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+import random
 
 import torch
 import torch.nn as nn
@@ -203,10 +204,10 @@ class ContextERM(ERM):
         num_hidden_features = 64
         self.environment_detector = torch.nn.GRU(input_size=flattened_input_shape,
                                                  hidden_size=num_hidden_features,
-                                                 num_layers=2, batch_first=True)
-        self.environment_predictor = torch.nn.Linear(num_hidden_features, num_domains)
+                                                 num_layers=1, batch_first=True, bidirectional=True)
+        self.environment_predictor = torch.nn.Linear(2 * num_hidden_features, num_domains) # 2 for bidirectional
         self.complete_environment_predictor = torch.nn.Sequential(self.environment_detector, self.environment_predictor)
-        self.network = ContextNetwork(input_shape, num_hidden_features, num_classes, hparams)
+        self.network = ContextNetwork(input_shape, 2 * num_hidden_features, num_classes, hparams)
         all_params = list(self.environment_detector.parameters()) + \
                          list(self.environment_predictor.parameters()) + \
                          list(self.network.parameters())
@@ -220,6 +221,7 @@ class ContextERM(ERM):
 
 
     def update(self, minibatches, unlabeled=None):
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
         num_train_envs = len(minibatches)
 
         # For each training environment
@@ -227,19 +229,32 @@ class ContextERM(ERM):
         pred_envs = []
         env_fts = []
         seq_importances = []
+
+        enum_select_high_confidence = 'hc'
+        enum_select_low_confidence = 'lc'
+        enum_select_mid_confidence = 'mc'
+
+        # TODO multi-dimensional mixup ratio for more than 2 training environments
+        sample_selection_cap = int(num_train_envs * 0.3)
+        mixup_ratio = 0.9
+        num_main_samples = int(sample_selection_cap * mixup_ratio)
+        num_secondary_samples = sample_selection_cap - num_main_samples
+        main_environment = random.choice(num_train_envs)
+
         for i, env_batch in enumerate(minibatches):
             # Get the batch data
-            x, _  = env_batch
+            x, _ = env_batch
             flat_x = torch.flatten(x, start_dim=1)
             batch_len = len(x)
             # environment predictions = environment id
-            gt = torch.ones(batch_len) * i
+            gt = torch.ones(batch_len).to(device) * i
             # Since only 1 batch is being used, we hard code 1 as the batch size
             reshaped_x = flat_x.reshape(torch.cat([torch.tensor([1]), torch.tensor(flat_x.shape)]).tolist())
-            # TODO Use the output states to predict the environment for each sample
             m_env_feats = self.environment_detector(reshaped_x)[0][0]
             # m_env_feats = self.environment_detector(reshaped_x)[1][1].flatten()
-            env_fts.append(torch.ones(batch_len, 1) * m_env_feats[-1]) # The prediction for the last
+            # Instead of the last, take the average
+            env_fts.append(torch.ones(batch_len, 1).to(device) * torch.mean(m_env_feats, axis=0))
+            # env_fts.append(torch.ones(batch_len, 1).to(device) * m_env_feats[-1])  # The prediction for the last
             preds = self.environment_predictor(m_env_feats)
             gt_envs.append(gt)
             pred_envs.append(preds)
@@ -262,9 +277,11 @@ class ContextERM(ERM):
         return {'loss': total_loss.item()}
 
     def predict(self, x):
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
         flat_x = torch.flatten(x, start_dim=1)
         reshaped_x = flat_x.reshape(torch.cat([torch.tensor([1]), torch.tensor(flat_x.shape)]).tolist())
         m_env_feats = self.environment_detector(reshaped_x)[0][0]
+        m_env_feats = torch.ones(x.shape[0], 1).to(device) * torch.mean(m_env_feats, axis=0)
         # env_preds = self.environment_predictor(m_env_feats)
         return self.network(x, m_env_feats)
 
