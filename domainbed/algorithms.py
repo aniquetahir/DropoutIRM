@@ -224,6 +224,8 @@ class ContextERM(ERM):
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         num_train_envs = len(minibatches)
 
+        batch_size = self.hparams['batch_size']
+
         # For each training environment
         gt_envs = []
         pred_envs = []
@@ -235,15 +237,20 @@ class ContextERM(ERM):
         enum_select_mid_confidence = 'mc'
 
         # TODO multi-dimensional mixup ratio for more than 2 training environments
-        sample_selection_cap = int(num_train_envs * 0.3)
-        mixup_ratio = 0.9
-        num_main_samples = int(sample_selection_cap * mixup_ratio)
-        num_secondary_samples = sample_selection_cap - num_main_samples
-        main_environment = random.choice(num_train_envs)
+        sample_selection_cap = int(batch_size * 0.3)
+        num_env_samples = int(sample_selection_cap / num_train_envs)
+        # Mixup can be randomized(maybe according to power law to introduce distributional bias
+        # mixup_ratio = 0.9
+        # num_main_samples = int(sample_selection_cap * mixup_ratio)
+        # num_secondary_samples = sample_selection_cap - num_main_samples
+
+        augmentation_environment = random.choice(range(num_train_envs))
+        augmented_batch_x = []
+        augmented_batch_y = []
 
         for i, env_batch in enumerate(minibatches):
             # Get the batch data
-            x, _ = env_batch
+            x, y = env_batch
             flat_x = torch.flatten(x, start_dim=1)
             batch_len = len(x)
             # environment predictions = environment id
@@ -256,6 +263,13 @@ class ContextERM(ERM):
             env_fts.append(torch.ones(batch_len, 1).to(device) * torch.mean(m_env_feats, axis=0))
             # env_fts.append(torch.ones(batch_len, 1).to(device) * m_env_feats[-1])  # The prediction for the last
             preds = self.environment_predictor(m_env_feats)
+            obj_probs = preds[:, augmentation_environment].tolist()
+            obj_indices = range(batch_len)
+
+            augmented_dataset_indices = random.choices(obj_indices, obj_probs, k=num_env_samples)
+            augmented_batch_x.append(x[augmented_dataset_indices])
+            augmented_batch_y.append(y[augmented_dataset_indices])
+
             gt_envs.append(gt)
             pred_envs.append(preds)
             seq_importances.append(torch.linspace(0, 1, batch_len))
