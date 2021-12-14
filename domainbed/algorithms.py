@@ -302,9 +302,9 @@ class ContextERM(ERM):
 
         self.environment_optimizer.zero_grad()
         loss_env_predictor.backward()
-        self.optimizer.step()
+        self.environment_optimizer.step()
 
-        return {'loss': loss_label_predictor.item()}
+        return {'loss': loss_label_predictor.item(), 'env_pred_loss': loss_env_predictor.item()}
 
     def predict(self, x):
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
