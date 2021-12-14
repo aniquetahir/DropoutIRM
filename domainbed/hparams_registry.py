@@ -134,16 +134,19 @@ def _hparams(algorithm, dataset, random_seed):
     else:
         _hparam('weight_decay', 0., lambda r: 10**r.uniform(-6, -2))
 
-    if dataset in SMALL_IMAGES:
+
+    if algorithm == 'ContextERM' and dataset in SMALL_IMAGES:
+        _hparam('batch_size', 512, lambda r: int(2**r.uniform(5, 12)))
+    elif dataset in SMALL_IMAGES:
         _hparam('batch_size', 64, lambda r: int(2**r.uniform(3, 9)))
     elif algorithm == 'ARM':
         _hparam('batch_size', 8, lambda r: 8)
     elif dataset == 'DomainNet':
         _hparam('batch_size', 32, lambda r: int(2**r.uniform(3, 5)))
-    elif algorithm == 'ContextERM':
-        _hparam('batch_size', 256, lambda r: int(2**r.uniform(5, 12)))
     else:
         _hparam('batch_size', 32, lambda r: int(2**r.uniform(3, 5.5)))
+
+
 
 
     if algorithm in ['DANN', 'CDANN'] and dataset in SMALL_IMAGES:

@@ -207,17 +207,28 @@ class ContextERM(ERM):
                                                  num_layers=1, batch_first=True, bidirectional=True)
         self.environment_predictor = torch.nn.Linear(2 * num_hidden_features, num_domains) # 2 for bidirectional
         self.complete_environment_predictor = torch.nn.Sequential(self.environment_detector, self.environment_predictor)
-        self.network = ContextNetwork(input_shape, 2 * num_hidden_features, num_classes, hparams)
-        all_params = list(self.environment_detector.parameters()) + \
-                         list(self.environment_predictor.parameters()) + \
-                         list(self.network.parameters())
+
+        # self.network = ContextNetwork(input_shape, 2 * num_hidden_features, num_classes, hparams)
+
+        environment_predictor_params = list(self.environment_detector.parameters()) + \
+                                        list(self.environment_predictor.parameters())
+
+        classifier_params = self.network.parameters()
+        # all_params = list(self.environment_detector.parameters()) + \
+        #                  list(self.environment_predictor.parameters()) + \
+        #                  list(self.network.parameters())
+
         self.optimizer = torch.optim.Adam(
-            all_params,
+            classifier_params,
             lr=self.hparams['lr'],
             weight_decay=self.hparams['weight_decay']
         )
 
-
+        self.environment_optimizer = torch.optim.Adam(
+            environment_predictor_params,
+            lr=self.hparams['lr'],
+            weight_decay=self.hparams['weight_decay']
+        )
 
 
     def update(self, minibatches, unlabeled=None):
@@ -274,33 +285,35 @@ class ContextERM(ERM):
             pred_envs.append(preds)
             seq_importances.append(torch.linspace(0, 1, batch_len))
 
-        loss_env_predictor = F.cross_entropy(torch.vstack(pred_envs), torch.cat(gt_envs).type(torch.long))
 
         # Train the normal erm featurizer
         env_fts = torch.vstack(env_fts)
-        all_x = torch.cat([x for x, y in minibatches])
-        all_y = torch.cat([y for x, y in minibatches])
-        loss_label_predictor = F.cross_entropy(self.network(all_x, env_fts), all_y)
+        all_x = torch.vstack(augmented_batch_x)
+        all_y = torch.cat(augmented_batch_y)
+        # all_x = torch.cat([x for x, y in minibatches])
+        # all_y = torch.cat([y for x, y in minibatches])
 
-        total_loss = loss_env_predictor + loss_label_predictor
+        loss_env_predictor = F.cross_entropy(torch.vstack(pred_envs), torch.cat(gt_envs).type(torch.long))
+        loss_label_predictor = F.cross_entropy(self.network(all_x), all_y)
 
         self.optimizer.zero_grad()
-        total_loss.backward()
+        loss_label_predictor.backward()
         self.optimizer.step()
 
-        return {'loss': total_loss.item()}
+        self.environment_optimizer.zero_grad()
+        loss_env_predictor.backward()
+        self.optimizer.step()
+
+        return {'loss': loss_label_predictor.item()}
 
     def predict(self, x):
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        flat_x = torch.flatten(x, start_dim=1)
-        reshaped_x = flat_x.reshape(torch.cat([torch.tensor([1]), torch.tensor(flat_x.shape)]).tolist())
-        m_env_feats = self.environment_detector(reshaped_x)[0][0]
-        m_env_feats = torch.ones(x.shape[0], 1).to(device) * torch.mean(m_env_feats, axis=0)
+        # flat_x = torch.flatten(x, start_dim=1)
+        # reshaped_x = flat_x.reshape(torch.cat([torch.tensor([1]), torch.tensor(flat_x.shape)]).tolist())
+        # m_env_feats = self.environment_detector(reshaped_x)[0][0]
+        # m_env_feats = torch.ones(x.shape[0], 1).to(device) * torch.mean(m_env_feats, axis=0)
         # env_preds = self.environment_predictor(m_env_feats)
-        return self.network(x, m_env_feats)
-
-        pass
-
+        return self.network(x)
 
 
 class ARM(ERM):
