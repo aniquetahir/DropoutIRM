@@ -4,6 +4,7 @@ import random
 from torchvision import datasets
 from torch import nn, optim, autograd
 import torch.nn.functional as F
+import networks
 
 
 mnist = datasets.MNIST('~/datasets/mnist', train=True, download=True)
@@ -64,6 +65,12 @@ def data_generator(dataset, batch_size=512):
                    dataset[2][batch_indices], dataset[3][batch_indices]]
 
 
+def flatten_reshape(x):
+    flat_x = torch.flatten(x, start_dim=1)
+    reshaped_x = flat_x.reshape(torch.cat([torch.tensor([1]), torch.tensor(flat_x.shape)]).tolist())
+    return reshaped_x
+
+
 def train_environment_predictor():
     num_epochs = 3000
 
@@ -100,9 +107,9 @@ def train_environment_predictor():
             num_env_samples = len(env_batch_x)
 
             gt = torch.ones(num_env_samples).to(device) * i
-
-            flat_x = torch.flatten(env_batch_x, start_dim=1)
-            reshaped_x = flat_x.reshape(torch.cat([torch.tensor([1]), torch.tensor(flat_x.shape)]).tolist())
+            reshaped_x = flatten_reshape(env_batch_x)
+            # flat_x = torch.flatten(env_batch_x, start_dim=1)
+            # reshaped_x = flat_x.reshape(torch.cat([torch.tensor([1]), torch.tensor(flat_x.shape)]).tolist())
             m_env_feats = environment_detector(reshaped_x)[0][0]
 
             preds = environment_predictor(m_env_feats)
@@ -122,6 +129,26 @@ def train_environment_predictor():
 
     return environment_detector, environment_predictor
 
+
+def train_erm(env_detector, env_predictor):
+    num_iterations = 2000
+    num_classes = 2
+    input_shape = None
+    hparams = {'data_augmentation': True,
+     'resnet18': False,
+     'resnet_dropout': 0.0,
+     'class_balanced': False,
+     'nonlinear_classifier': False,
+     'lr': 0.001,
+     'weight_decay': 0.0,
+     'batch_size': 512}
+    featurizer = networks.Featurizer(input_shape, hparams)
+    classifier = networks.Classifier(
+        featurizer.n_outputs,
+        num_classes,
+        hparams['nonlinear_classifier']
+    )
+    pass
 
 if __name__ == "__main__":
     env_detector, env_predictor = train_environment_predictor()
