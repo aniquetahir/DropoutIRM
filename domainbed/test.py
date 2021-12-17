@@ -18,6 +18,7 @@ np.random.shuffle(mnist_train[1].numpy())
 
 # Build environments
 
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 def make_environment(images, labels, e):
     def torch_bernoulli(p, size):
         return (torch.rand(size) < p).float()
@@ -35,10 +36,10 @@ def make_environment(images, labels, e):
     images = torch.stack([images, images], dim=1)
     images[torch.tensor(range(len(images))), (1-colors).long(), :, :] *= 0
     return {
-        'images': (images.float() / 255.).cuda(),
-        'labels': labels[:, None].cuda(),
-        'gt_labels': gt_labels[:, None].cuda(),
-        'colors': colors.cuda()
+        'images': (images.float() / 255.).to(device),
+        'labels': labels[:, None].to(device),
+        'gt_labels': gt_labels[:, None].to(device),
+        'colors': colors.to(device)
     }
 
 envs = [
@@ -47,11 +48,10 @@ make_environment(mnist_train[0][1::2], mnist_train[1][1::2], 0.1),
 make_environment(mnist_val[0], mnist_val[1], 0.9)
 ]
 envs = [(e['images'], e['labels'], e['gt_labels'], e['colors']) for e in envs]
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
 
 training_envs = envs[:-1]
 test_envs = envs[-1:]
+batch_size = 512
 
 def data_generator(dataset, batch_size=512):
     num_samples = len(dataset[0])
@@ -122,18 +122,27 @@ def train_environment_predictor():
         optimizer.zero_grad()
         loss_env_prediction.backward()
         optimizer.step()
-
         # optimize
         if j % 100 == 0:
             print(f'Epoch: {j}, Loss: {loss_env_prediction.item()}')
 
+    torch.save(
+        environment_detector.state_dict(), 'environment_detector.pth'
+    )
+    torch.save(
+        environment_predictor.state_dict(), 'environment_predictor.pth'
+    )
     return environment_detector, environment_predictor
 
 
+def get_color_label_correlation(labels, colors):
+    return np.correlate(labels, colors)
+
+
 def train_erm(env_detector, env_predictor):
-    num_iterations = 2000
+    num_epochs = 2000
     num_classes = 2
-    input_shape = None
+    input_shape = (2, 14, 14)
     hparams = {'data_augmentation': True,
      'resnet18': False,
      'resnet_dropout': 0.0,
@@ -148,6 +157,47 @@ def train_erm(env_detector, env_predictor):
         num_classes,
         hparams['nonlinear_classifier']
     )
+    network = nn.Sequential(featurizer, classifier)
+    optimizer = torch.optim.Adam(
+        network.parameters(),
+        lr = hparams['lr']
+    )
+    train_generators = [data_generator(x, batch_size=batch_size) for x in training_envs]
+    num_train_environments = len(train_generators)
+
+    for j in range(num_epochs):
+        augmentation_environment = random.choice(range(num_train_environments))
+        augmented_batch_x = []
+        augmented_batch_y = []
+        augmented_batch_colors = []
+
+        for i, gen in enumerate(train_generators):
+            x, y, _, c = next(gen)
+            batch_len = len(x)
+            # Get the environment
+            reshaped_x = flatten_reshape(x)
+            m_env_feats = env_detector(reshaped_x)[0][0]
+            env_preds = env_predictor(m_env_feats)
+            obj_probs = env_preds[:, augmentation_environment].tolist()
+            obj_indices = range(batch_len)
+
+            augmented_dataset_indices = random.choices(obj_indices, obj_probs, k=batch_size)
+            augmented_batch_x.append(x[augmented_dataset_indices])
+            augmented_batch_y.append(y[augmented_dataset_indices])
+            augmented_batch_colors.append(c[augmented_dataset_indices])
+
+        all_x = torch.vstack(augmented_batch_x)
+        all_y = torch.cat(augmented_batch_y)
+        all_colors = torch.cat(augmented_batch_colors)
+
+        loss_label_predictor = F.cross_entropy(network(all_x), all_y)
+        optimizer.zero_grad()
+        loss_label_predictor.backward()
+        optimizer.step()
+        color_label_corr = get_color_label_correlation(all_y, all_colors)
+        if j%100 == 0:
+            print(f'Epoch: {j}, Loss: {loss_label_predictor.item()}, Color_Correlation: {color_label_corr}')
+
     pass
 
 if __name__ == "__main__":
