@@ -163,7 +163,7 @@ def train_erm(env_detector, env_predictor):
         num_classes,
         hparams['nonlinear_classifier']
     )
-    network = nn.Sequential(featurizer, classifier)
+    network = nn.Sequential(featurizer, classifier).to(device)
     optimizer = torch.optim.Adam(
         network.parameters(),
         lr = hparams['lr']
@@ -193,7 +193,7 @@ def train_erm(env_detector, env_predictor):
             obj_probs /= torch.sum(obj_probs)
             obj_indices = np.arange(batch_len)
             # TODO fix the size to be less than the batch size
-            augmented_dataset_indices = np.random.choice(obj_indices, size=num_env_samples, replace=False, p=obj_probs.detach().numpy())
+            augmented_dataset_indices = np.random.choice(obj_indices, size=num_env_samples, replace=False, p=obj_probs.detach().cpu().numpy())
             # augmented_dataset_indices = random.choices(obj_indices, obj_probs, k=batch_size)
             augmented_batch_x.append(x[augmented_dataset_indices])
             augmented_batch_y.append(y[augmented_dataset_indices])
