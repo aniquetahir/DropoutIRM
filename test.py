@@ -4,7 +4,8 @@ import random
 from torchvision import datasets
 from torch import nn, optim, autograd
 import torch.nn.functional as F
-import networks
+from domainbed import networks
+import os
 
 
 mnist = datasets.MNIST('~/datasets/mnist', train=True, download=True)
@@ -72,6 +73,7 @@ def flatten_reshape(x):
 
 
 def train_environment_predictor():
+    # TODO incorporte information about the labels in the environment classifier
     num_epochs = 3000
 
     input_shape = training_envs[0][0][0].shape
@@ -87,6 +89,13 @@ def train_environment_predictor():
                                         bidirectional = True).to(device)
 
     environment_predictor = torch.nn.Linear(2 * num_hidden_features, num_domains).to(device)
+
+    if os.path.exists('environment_predictor.pth') and os.path.exists('environment_detector.pth'):
+        environment_predictor = torch.load('environment_predictor.pth')
+        environment_detector = torch.load('environment_detector.pth')
+        # Since model is already trained, we ensure it is doing the right thing
+        num_epochs = 200
+
 
     all_params = list(environment_detector.parameters()) + list(environment_predictor.parameters())
 
@@ -126,23 +135,20 @@ def train_environment_predictor():
         if j % 100 == 0:
             print(f'Epoch: {j}, Loss: {loss_env_prediction.item()}')
 
-    torch.save(
-        environment_detector.state_dict(), 'environment_detector.pth'
-    )
-    torch.save(
-        environment_predictor.state_dict(), 'environment_predictor.pth'
-    )
+    torch.save(environment_detector, 'environment_detector.pth')
+    torch.save(environment_predictor, 'environment_predictor.pth')
+    print(loss_env_prediction.item())
     return environment_detector, environment_predictor
 
 
 def get_color_label_correlation(labels, colors):
-    return np.correlate(labels, colors)
+    return np.correlate(labels, colors)/len(labels)
 
 
 def train_erm(env_detector, env_predictor):
     num_epochs = 2000
     num_classes = 2
-    input_shape = (2, 14, 14)
+    input_shape = (2, 28, 28)
     hparams = {'data_augmentation': True,
      'resnet18': False,
      'resnet_dropout': 0.0,
@@ -174,14 +180,21 @@ def train_erm(env_detector, env_predictor):
         for i, gen in enumerate(train_generators):
             x, y, _, c = next(gen)
             batch_len = len(x)
+
+            sample_selection_cap = int(batch_len * 0.3)
+            num_env_samples = int(sample_selection_cap / num_train_environments)
+
             # Get the environment
             reshaped_x = flatten_reshape(x)
             m_env_feats = env_detector(reshaped_x)[0][0]
             env_preds = env_predictor(m_env_feats)
-            obj_probs = env_preds[:, augmentation_environment].tolist()
-            obj_indices = range(batch_len)
-
-            augmented_dataset_indices = random.choices(obj_indices, obj_probs, k=batch_size)
+            obj_probs = env_preds[:, augmentation_environment]
+            obj_probs -= torch.min(obj_probs)
+            obj_probs /= torch.sum(obj_probs)
+            obj_indices = np.arange(batch_len)
+            # TODO fix the size to be less than the batch size
+            augmented_dataset_indices = np.random.choice(obj_indices, size=num_env_samples, replace=False, p=obj_probs.detach().numpy())
+            # augmented_dataset_indices = random.choices(obj_indices, obj_probs, k=batch_size)
             augmented_batch_x.append(x[augmented_dataset_indices])
             augmented_batch_y.append(y[augmented_dataset_indices])
             augmented_batch_colors.append(c[augmented_dataset_indices])
@@ -190,11 +203,11 @@ def train_erm(env_detector, env_predictor):
         all_y = torch.cat(augmented_batch_y)
         all_colors = torch.cat(augmented_batch_colors)
 
-        loss_label_predictor = F.cross_entropy(network(all_x), all_y)
+        loss_label_predictor = F.cross_entropy(network(all_x), all_y.T[0].type(torch.long))
         optimizer.zero_grad()
         loss_label_predictor.backward()
         optimizer.step()
-        color_label_corr = get_color_label_correlation(all_y, all_colors)
+        color_label_corr = get_color_label_correlation(all_y.T[0], all_colors)
         if j%100 == 0:
             print(f'Epoch: {j}, Loss: {loss_label_predictor.item()}, Color_Correlation: {color_label_corr}')
 
@@ -203,5 +216,6 @@ def train_erm(env_detector, env_predictor):
 if __name__ == "__main__":
     env_detector, env_predictor = train_environment_predictor()
     # print('====')
+    train_erm(env_detector, env_predictor)
 
 
