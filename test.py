@@ -145,8 +145,13 @@ def get_color_label_correlation(labels, colors):
     return np.correlate(labels, colors)/len(labels)
 
 
+def mean_accuracy(logits, y):
+    preds = (logits > 0.).float()
+    return ((preds - y).abs() < 1e-2).float().mean()
+
+
 def train_erm(env_detector, env_predictor):
-    num_epochs = 2000
+    num_epochs = 10000
     num_classes = 2
     input_shape = (2, 28, 28)
     hparams = {'data_augmentation': True,
@@ -154,7 +159,7 @@ def train_erm(env_detector, env_predictor):
      'resnet_dropout': 0.0,
      'class_balanced': False,
      'nonlinear_classifier': False,
-     'lr': 0.001,
+     'lr': 0.005,
      'weight_decay': 0.0,
      'batch_size': 512}
     featurizer = networks.Featurizer(input_shape, hparams)
@@ -169,6 +174,7 @@ def train_erm(env_detector, env_predictor):
         lr = hparams['lr']
     )
     train_generators = [data_generator(x, batch_size=batch_size) for x in training_envs]
+    test_generators = [data_generator(x) for x in test_envs]
     num_train_environments = len(train_generators)
 
     for j in range(num_epochs):
@@ -207,9 +213,31 @@ def train_erm(env_detector, env_predictor):
         optimizer.zero_grad()
         loss_label_predictor.backward()
         optimizer.step()
-        color_label_corr = get_color_label_correlation(all_y.T[0], all_colors)
+        # color_label_corr = get_color_label_correlation(all_y.detach().to('cpu').T[0], all_colors.detach.to('cpu'))
         if j%100 == 0:
-            print(f'Epoch: {j}, Loss: {loss_label_predictor.item()}, Color_Correlation: {color_label_corr}')
+            print(f'Epoch: {j}, Loss: {loss_label_predictor.item()}, Color_Correlation: ')
+            # print the accuracy for a sample of the test environment
+            e1_x, e1_y, e1_true_y, e1_colors = next(train_generators[0])
+            e2_x, e2_y, e2_true_y, e2_colors = next(train_generators[1])
+            # Get a batch of the test data
+            test_x, test_y, test_true_y, test_colors = next(test_generators[0])
+            # get the predictions 
+            test_preds = network(test_x)
+            e1_preds = network(e1_x)
+            e2_preds = network(e2_x)
+            # compare the number of predictions that match the ground truth
+            test_acc = mean_accuracy(test_preds, test_y)
+            test_true_acc = mean_accuracy(test_preds, test_true_y)
+
+            e1_acc = mean_accuracy(e1_preds, e1_y)
+            e1_acc = mean_accuracy(e1_preds, e1_true_y)
+
+            e2_acc = mean_accuracy(e2_preds, e2_y)
+            e2_acc = mean_accuracy(e2_preds, e2_true_y)
+
+            print(f'Test Accuracy: {test_acc}, True: {test_true_acc}')
+            print(f'E1 Accuracy: {e1_acc}, True: {e1_true_y}')
+            print(f'E2 Accuracy: {e2_acc}')
 
     pass
 
