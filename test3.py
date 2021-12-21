@@ -52,7 +52,7 @@ envs = [(e['images'], e['labels'], e['gt_labels'], e['colors']) for e in envs]
 
 training_envs = envs[:-1]
 test_envs = envs[-1:]
-batch_size = 512
+batch_size = 2048
 
 def data_generator(dataset, batch_size=512):
     num_samples = len(dataset[0])
@@ -79,7 +79,7 @@ def train_environment_predictor():
     input_shape = training_envs[0][0][0].shape
     flattened_input_shape = np.prod(list(input_shape))
     num_hidden_features = 64
-    num_domains = len(training_envs)
+    num_domains = len(training_envs) + len(test_envs)
 
     # Define the sequence classification model
     environment_detector = torch.nn.GRU(input_size = flattened_input_shape,
@@ -104,15 +104,18 @@ def train_environment_predictor():
         lr=0.005
     )
     train_generators = [data_generator(x) for x in training_envs]
+    test_generators = [data_generator(x) for x in test_envs]
+    all_generators = train_generators + test_generators
+    all_envs = training_envs + test_envs
 
     for j in range(num_epochs):
         # For each training environment
         pred_envs = []
         gt_envs = []
 
-        for i, env in enumerate(training_envs):
+        for i, env in enumerate(all_envs):
             # Get the sequence of the samples
-            env_batch_x, _, _, _ = next(train_generators[i])
+            env_batch_x, _, _, _ = next(all_generators[i])
             num_env_samples = len(env_batch_x)
 
             gt = torch.ones(num_env_samples).to(device) * i
@@ -124,6 +127,8 @@ def train_environment_predictor():
             preds = environment_predictor(m_env_feats)
             pred_envs.append(preds)
             gt_envs.append(gt)
+
+
 
         loss_env_prediction = F.cross_entropy(torch.vstack(pred_envs), torch.cat(gt_envs).type(torch.long))
 
@@ -179,9 +184,10 @@ def train_erm(env_detector, env_predictor):
     train_generators = [data_generator(x, batch_size=batch_size) for x in training_envs]
     test_generators = [data_generator(x) for x in test_envs]
     num_train_environments = len(train_generators)
+    num_all_envs = num_train_environments + len(test_generators)
 
     for j in range(num_epochs):
-        augmentation_environment = random.choice(range(num_train_environments))
+        augmentation_environment = random.choice(range(num_train_environments, num_all_envs))
         augmented_batch_x = []
         augmented_batch_y = []
         augmented_batch_colors = []
@@ -191,7 +197,7 @@ def train_erm(env_detector, env_predictor):
             x, y, t, c = next(gen)
             batch_len = len(x)
 
-            sample_selection_cap = int(batch_len * 0.3)
+            sample_selection_cap = int(batch_len * 0.1)
             num_env_samples = int(sample_selection_cap / num_train_environments)
 
             # Get the environment
