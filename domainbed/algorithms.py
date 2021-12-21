@@ -226,7 +226,7 @@ class ContextERM(ERM):
 
         self.environment_optimizer = torch.optim.Adam(
             environment_predictor_params,
-            lr=self.hparams['lr'],
+            lr=0.007, # The name is Bond. James Bond
             weight_decay=self.hparams['weight_decay']
         )
 
@@ -277,7 +277,8 @@ class ContextERM(ERM):
             obj_probs = preds[:, augmentation_environment].tolist()
             obj_indices = range(batch_len)
 
-            augmented_dataset_indices = random.choices(obj_indices, obj_probs, k=num_env_samples)
+            augmented_dataset_indices = np.random.choice(obj_indices, size=num_env_samples, replace=False, p=obj_probs.detach().cpu().numpy())
+            # augmented_dataset_indices = random.choices(obj_indices, obj_probs, k=num_env_samples)
             augmented_batch_x.append(x[augmented_dataset_indices])
             augmented_batch_y.append(y[augmented_dataset_indices])
 
