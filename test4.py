@@ -74,7 +74,7 @@ def flatten_reshape(x):
 
 def train_environment_predictor():
     # TODO incorporte information about the labels in the environment classifier
-    num_epochs = 20000
+    num_epochs = 3000
 
     input_shape = training_envs[0][0][0].shape
     flattened_input_shape = np.prod(list(input_shape))
@@ -218,6 +218,8 @@ def train_erm(env_detector, env_predictor):
     num_train_environments = len(train_generators)
     num_all_envs = num_train_environments + len(test_generators)
 
+    one_hot_envs = torch.nn.functional.one_hot(torch.arange(num_all_envs), num_all_envs).to(device)
+
     for j in range(num_epochs):
         augmentation_environment = random.choice(range(num_train_environments, num_all_envs))
         augmented_batch_x = []
@@ -225,53 +227,51 @@ def train_erm(env_detector, env_predictor):
         augmented_batch_colors = []
         augmented_true_y = []
 
+        sample_ratio = 0.1
         for i, gen in enumerate(train_generators):
             x, y, t, c = next(gen)
-            batch_len = len(x)
+            augmented_batch_x.append(x)
+            augmented_batch_y.append(y)
+            augmented_batch_colors.append(c)
+            augmented_true_y.append(t)
 
-            sample_selection_cap = int(batch_len * 0.1)
-            num_env_samples = int(sample_selection_cap / num_train_environments)
-
-            # Get the environment
-            reshaped_x = flatten_reshape(x)
-            m_env_feats = env_detector(reshaped_x)[0][0]
-            env_preds = env_predictor(m_env_feats)
-            obj_probs = env_preds[:, augmentation_environment].detach()
-            obj_probs -= torch.min(obj_probs)
-            # obj_probs /= torch.max(obj_probs)
-            # obj_probs = torch.abs(0.5 - obj_probs)
-            # obj_probs -= torch.min(obj_probs)
-            obj_probs /= torch.sum(obj_probs)
-            obj_indices = np.arange(batch_len)
-            # TODO fix the size to be less than the batch size
-            augmented_dataset_indices = np.random.choice(obj_indices, size=num_env_samples, replace=False, p=obj_probs.cpu().numpy())
-            augmented_batch_x.append(x[augmented_dataset_indices])
-            augmented_batch_y.append(y[augmented_dataset_indices])
-            augmented_true_y.append(t[augmented_dataset_indices])
-            augmented_batch_colors.append(c[augmented_dataset_indices])
-            # augmented_batch_x.append(x)
-            # augmented_batch_y.append(y)
-            # augmented_true_y.append(t)
-            # augmented_batch_colors.append(c)
-
-            if j % 100 == 0:
-                print(f'Augmentation Environment: {augmentation_environment}')
-                print(f'E{i} Augmented Label/True percentage: {torch.sum((t[augmented_dataset_indices] == y[augmented_dataset_indices]).type(torch.int8))/len(augmented_dataset_indices)}')
-                print(f'E{i} Label/True percentage: {torch.sum((t == y).type(torch.int8))/len(y)}')
 
         all_x = torch.vstack(augmented_batch_x)
         all_y = torch.cat(augmented_batch_y)
         all_colors = torch.cat(augmented_batch_colors)
         all_true_y = torch.cat(augmented_true_y)
 
-        loss_label_predictor = F.cross_entropy(network(all_x), all_y.T[0].type(torch.long))
+        flattened_x = flatten_reshape(all_x)
+        m_feats = env_detector(flattened_x)[0][0]
+
+        # Choose the environment to train from randomly from the training ones
+        num_samples = len(m_feats)
+        m_feats_input = torch.ones(num_samples, 1).to(device) * one_hot_envs[augmentation_environment]
+        m_feats_input = torch.hstack([m_feats_input, m_feats])
+
+        selection_logits = env_predictor(m_feats_input)
+        selection_probs = selection_logits[:, 1].detach().cpu().numpy()
+        selection_probs -= np.min(selection_probs)
+        selection_probs /= np.sum(selection_probs)
+
+        num_selections = int(len(selection_logits) * sample_ratio)
+
+        choice_indices = np.random.choice(np.arange(num_samples), size=num_selections, replace=False, p=selection_probs)
+        # get the x and y for the choices and train on them
+        filtered_x = all_x[choice_indices]
+        filtered_y = all_y[choice_indices]
+        filtered_colors = all_colors[choice_indices]
+        filtered_true_y = all_true_y[choice_indices]
+
+
+        loss_label_predictor = F.cross_entropy(network(filtered_x), filtered_y.T[0].type(torch.long))
         optimizer.zero_grad()
         loss_label_predictor.backward()
         optimizer.step()
-        color_label_corr = get_color_label_correlation(all_y.detach().to('cpu'), all_colors.detach().to('cpu'))
+        color_label_corr = get_color_label_correlation(filtered_y.detach().to('cpu'), filtered_colors.detach().to('cpu'))
         if j % 100 == 0:
             print(f'Epoch: {j}, Loss: {loss_label_predictor.item()}, Color_Correlation: {color_label_corr}')
-            print(f'All Label/True percentage: {torch.sum((all_y == all_true_y).type(torch.int8))/len(all_y)}')
+            print(f'All Label/True percentage: {torch.sum((filtered_y == filtered_true_y).type(torch.int8))/len(filtered_y)}')
             # print the accuracy for a sample of the test environment
             e1_x, e1_y, e1_true_y, e1_colors = next(train_generators[0])
             e2_x, e2_y, e2_true_y, e2_colors = next(train_generators[1])
