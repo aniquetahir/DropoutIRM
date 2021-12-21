@@ -274,7 +274,9 @@ class ContextERM(ERM):
             env_fts.append(torch.ones(batch_len, 1).to(device) * torch.mean(m_env_feats, axis=0))
             # env_fts.append(torch.ones(batch_len, 1).to(device) * m_env_feats[-1])  # The prediction for the last
             preds = self.environment_predictor(m_env_feats)
-            obj_probs = preds[:, augmentation_environment].tolist()
+            obj_probs = preds[:, augmentation_environment]
+            obj_probs -= torch.min(obj_probs)
+            obj_probs /= torch.sum(obj_probs)
             obj_indices = range(batch_len)
 
             augmented_dataset_indices = np.random.choice(obj_indices, size=num_env_samples, replace=False, p=obj_probs.detach().cpu().numpy())
