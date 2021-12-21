@@ -94,7 +94,7 @@ def train_environment_predictor():
         environment_predictor = torch.load('environment_predictor.pth')
         environment_detector = torch.load('environment_detector.pth')
         # Since model is already trained, we ensure it is doing the right thing
-        num_epochs = 200
+        num_epochs = 100
 
 
     all_params = list(environment_detector.parameters()) + list(environment_predictor.parameters())
@@ -182,9 +182,10 @@ def train_erm(env_detector, env_predictor):
         augmented_batch_x = []
         augmented_batch_y = []
         augmented_batch_colors = []
+        augmented_true_y = []
 
         for i, gen in enumerate(train_generators):
-            x, y, _, c = next(gen)
+            x, y, t, c = next(gen)
             batch_len = len(x)
 
             sample_selection_cap = int(batch_len * 0.3)
@@ -203,19 +204,26 @@ def train_erm(env_detector, env_predictor):
             # augmented_dataset_indices = random.choices(obj_indices, obj_probs, k=batch_size)
             augmented_batch_x.append(x[augmented_dataset_indices])
             augmented_batch_y.append(y[augmented_dataset_indices])
+            augmented_true_y.append(t[augmented_dataset_indices])
             augmented_batch_colors.append(c[augmented_dataset_indices])
+            if j % 100 == 0:
+                print(f'Augmentation Environment: {augmentation_environment}')
+                print(f'E{i} Augmented Label/True percentage: {torch.sum((t[augmented_dataset_indices] == y[augmented_dataset_indices]).type(torch.int8))/len(augmented_dataset_indices)}')
+                print(f'E{i} Label/True percentage: {torch.sum((t == y).type(torch.int8))/len(y)}')
 
         all_x = torch.vstack(augmented_batch_x)
         all_y = torch.cat(augmented_batch_y)
         all_colors = torch.cat(augmented_batch_colors)
+        all_true_y = torch.cat(augmented_true_y)
 
         loss_label_predictor = F.cross_entropy(network(all_x), all_y.T[0].type(torch.long))
         optimizer.zero_grad()
         loss_label_predictor.backward()
         optimizer.step()
         # color_label_corr = get_color_label_correlation(all_y.detach().to('cpu').T[0], all_colors.detach.to('cpu'))
-        if j%100 == 0:
+        if j % 100 == 0:
             print(f'Epoch: {j}, Loss: {loss_label_predictor.item()}, Color_Correlation: ')
+            print(f'All Label/True percentage: {torch.sum((all_y == all_true_y).type(torch.int8))/len(all_y)}')
             # print the accuracy for a sample of the test environment
             e1_x, e1_y, e1_true_y, e1_colors = next(train_generators[0])
             e2_x, e2_y, e2_true_y, e2_colors = next(train_generators[1])
@@ -230,15 +238,15 @@ def train_erm(env_detector, env_predictor):
             test_true_acc = mean_accuracy(test_preds, test_true_y)
 
             e1_acc = mean_accuracy(e1_preds, e1_y)
-            e1_acc = mean_accuracy(e1_preds, e1_true_y)
+            e1_true_acc = mean_accuracy(e1_preds, e1_true_y)
+
 
             e2_acc = mean_accuracy(e2_preds, e2_y)
-            e2_acc = mean_accuracy(e2_preds, e2_true_y)
+            e2_true_acc = mean_accuracy(e2_preds, e2_true_y)
 
             print(f'Test Accuracy: {test_acc}, True: {test_true_acc}')
-            print(f'E1 Accuracy: {e1_acc}, True: {e1_true_y}')
-            print(f'E2 Accuracy: {e2_acc}')
-
+            print(f'E1 Accuracy: {e1_acc}, True: {e1_true_acc}')
+            print(f'E2 Accuracy: {e2_acc}, True: {e2_true_acc}')
     pass
 
 if __name__ == "__main__":
