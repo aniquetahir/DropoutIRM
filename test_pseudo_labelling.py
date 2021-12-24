@@ -65,7 +65,7 @@ class MNIST_DROPOUT_CNN(nn.Module):
         return x
 
 
-def DropoutClassifier(in_features, out_features, is_nonlinear=False):
+def Classifier(in_features, out_features, is_nonlinear=False):
     if is_nonlinear:
         return torch.nn.Sequential(
             torch.nn.Linear(in_features, in_features // 2),
@@ -160,7 +160,7 @@ def mean_accuracy(logits, y):
     return acc
 
 
-def train_erm():
+def train_erm(env_detector, env_predictor):
     num_epochs = 10000
     num_classes = 2
     input_shape = (2, 28, 28)
@@ -175,11 +175,22 @@ def train_erm():
 
 
     # Get the dropout based featurizer and classifier
-    featurizer = MNIST_DROPOUT_CNN(input_shape)
-    classifier = DropoutClassifier(featurizer.n_outputs, num_classes, hparams['nonlinear_classifier'])
-    network = torch.nn.Sequential(featurizer, classifier)
 
-    optimizer = torch.optim.Adam(network.parameters(), lr=hparams['lr'])
+    featurizer = networks.Featurizer(input_shape, hparams)
+    classifier = networks.Classifier(
+        featurizer.n_outputs,
+        num_classes,
+        hparams['nonlinear_classifier']
+    )
+
+    # For each epoch
+        # Get the batch data from all the training environments
+        # get multiple predictions by changing the dropouts(How many) (detach)
+        # filter the samples which give the most stable predictions
+
+        # Iterate on the most well defined
+
+
 
     # featurizer = networks.Featurizer(input_shape, hparams)
     # classifier = networks.Classifier(
@@ -187,54 +198,103 @@ def train_erm():
     #     num_classes,
     #     hparams['nonlinear_classifier']
     # )
+    # network = nn.Sequential(featurizer, classifier).to(device)
+    # optimizer = torch.optim.Adam(
+    #     network.parameters(),
+    #     lr = hparams['lr']
+    # )
     train_generators = [data_generator(x, batch_size=batch_size) for x in training_envs]
     test_generators = [data_generator(x) for x in test_envs]
     num_train_environments = len(train_generators)
     num_all_envs = num_train_environments + len(test_generators)
 
-    num_uncertainty_predictions = 10
-
-    # For each epoch
-    for i in range(num_epochs):
-        # Get the batch data from all the training environments
-        env_x = []
-        env_y = []
-        for gen in train_generators:
-            x, y, _, _ = next(gen)
-            env_x.append(x)
-            env_y.append(y)
-
-        combined_x = torch.vstack(env_x)
-        combined_y = torch.cat(env_y)
-
-        # get multiple predictions by changing the dropouts(How many) (detach)
-        prediction_list = []
-        for i in range(num_uncertainty_predictions):
-            prediction_list.append(network(combined_x))
-
-        prediction_list = torch.stack(prediction_list)
-        # find the variation between the sample predictions
-            #
-        # filter the samples which give the most stable predictions
-
-        # Iterate on the most well defined(get the loss)
-        loss = None
-        optimizer.zero_grad()
-        loss.backwards()
-        optimizer.step()
-
-        if i % 100 == 0:
-            # Print the loss
-            # Print the accuracy for the training environments
-            # Print the accuracy for the test environments
-            pass
-
     environment_networks = []
 
+    for i in range(num_train_environments):
+        pass
+
+    one_hot_envs = torch.nn.functional.one_hot(torch.arange(num_all_envs), num_all_envs).to(device)
+
+    for j in range(num_epochs):
+        augmentation_environment = random.choice(range(num_train_environments, num_all_envs))
+        augmented_batch_x = []
+        augmented_batch_y = []
+        augmented_batch_colors = []
+        augmented_true_y = []
+
+        sample_ratio = 0.1
+        for i, gen in enumerate(train_generators):
+            x, y, t, c = next(gen)
+            augmented_batch_x.append(x)
+            augmented_batch_y.append(y)
+            augmented_batch_colors.append(c)
+            augmented_true_y.append(t)
+
+
+        all_x = torch.vstack(augmented_batch_x)
+        all_y = torch.cat(augmented_batch_y)
+        all_colors = torch.cat(augmented_batch_colors)
+        all_true_y = torch.cat(augmented_true_y)
+
+        flattened_x = flatten_reshape(all_x)
+        m_feats = env_detector(flattened_x)[0][0]
+
+        # Choose the environment to train from randomly from the training ones
+        num_samples = len(m_feats)
+        m_feats_input = torch.ones(num_samples, 1).to(device) * one_hot_envs[augmentation_environment]
+        m_feats_input = torch.hstack([m_feats_input, m_feats])
+
+        selection_logits = env_predictor(m_feats_input)
+        selection_probs = selection_logits[:, 1].detach().cpu().numpy()
+        selection_probs -= np.min(selection_probs)
+        selection_probs /= np.sum(selection_probs)
+
+        num_selections = int(len(selection_logits) * sample_ratio)
+
+        choice_indices = np.random.choice(np.arange(num_samples), size=num_selections, replace=False, p=selection_probs)
+        # get the x and y for the choices and train on them
+        filtered_x = all_x[choice_indices]
+        filtered_y = all_y[choice_indices]
+        filtered_colors = all_colors[choice_indices]
+        filtered_true_y = all_true_y[choice_indices]
+
+
+        loss_label_predictor = F.cross_entropy(network(filtered_x), filtered_y.T[0].type(torch.long))
+        optimizer.zero_grad()
+        loss_label_predictor.backward()
+        optimizer.step()
+        color_label_corr = get_color_label_correlation(filtered_y.detach().to('cpu'), filtered_colors.detach().to('cpu'))
+        if j % 100 == 0:
+            print(f'Epoch: {j}, Loss: {loss_label_predictor.item()}, Color_Correlation: {color_label_corr}')
+            print(f'All Label/True percentage: {torch.sum((filtered_y == filtered_true_y).type(torch.int8))/len(filtered_y)}')
+            # print the accuracy for a sample of the test environment
+            e1_x, e1_y, e1_true_y, e1_colors = next(train_generators[0])
+            e2_x, e2_y, e2_true_y, e2_colors = next(train_generators[1])
+            # Get a batch of the test data
+            test_x, test_y, test_true_y, test_colors = next(test_generators[0])
+            # get the predictions 
+            test_preds = network(test_x)
+            e1_preds = network(e1_x)
+            e2_preds = network(e2_x)
+            # compare the number of predictions that match the ground truth
+            test_acc = mean_accuracy(test_preds, test_y)
+            test_true_acc = mean_accuracy(test_preds, test_true_y)
+
+            e1_acc = mean_accuracy(e1_preds, e1_y)
+            e1_true_acc = mean_accuracy(e1_preds, e1_true_y)
+
+
+            e2_acc = mean_accuracy(e2_preds, e2_y)
+            e2_true_acc = mean_accuracy(e2_preds, e2_true_y)
+
+            print(f'Test Accuracy: {test_acc}, True: {test_true_acc}')
+            print(f'E1 Accuracy: {e1_acc}, True: {e1_true_acc}')
+            print(f'E2 Accuracy: {e2_acc}, True: {e2_true_acc}')
+    pass
 
 if __name__ == "__main__":
-    # env_detector, env_predictor = train_environment_predictor()
+    env_detector, env_predictor = train_environment_predictor()
     # print('====')
-    train_erm()
+    train_erm(env_detector, env_predictor)
 
 
