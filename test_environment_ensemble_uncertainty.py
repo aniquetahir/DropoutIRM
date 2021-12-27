@@ -8,7 +8,7 @@ from domainbed import networks
 import os
 
 
-GLOBAL_DROPOUT_RATE = 0.95
+GLOBAL_DROPOUT_RATE = 0.5
 
 class MNIST_DROPOUT_CNN(nn.Module):
     """
@@ -175,93 +175,89 @@ def train_erm():
 
 
     # Get the dropout based featurizer and classifier
-    featurizer = MNIST_DROPOUT_CNN(input_shape)
-    classifier = DropoutClassifier(featurizer.n_outputs, num_classes, hparams['nonlinear_classifier'])
+    featurizer = networks.Featurizer(input_shape, hparams)
+    classifier = networks.Classifier(featurizer.n_outputs, num_classes, hparams['nonlinear_classifier'])
     network = torch.nn.Sequential(featurizer, classifier).to(device)
-
     optimizer = torch.optim.Adam(network.parameters(), lr=hparams['lr'], weight_decay=1e-3)
 
-    # featurizer = networks.Featurizer(input_shape, hparams)
-    # classifier = networks.Classifier(
-    #     featurizer.n_outputs,
-    #     num_classes,
-    #     hparams['nonlinear_classifier']
-    # )
+    # Define models for each environment
+    train_env_models = []
+    for i, env in enumerate(training_envs):
+        f = networks.Featurizer(input_shape, hparams)
+        c = networks.Classifier(featurizer.n_outputs, num_classes, hparams['nonlinear_classifier'])
+        n = torch.nn.Sequential(f, c).to(device)
+        train_env_models.append({
+            'featurizer': f,
+            'classifier': c,
+            'network': n,
+            'optimizer': torch.optim.Adam(n.parameters(), lr=hparams['lr'], weight_decay=1e-3)
+        })
+
+
     train_generators = [data_generator(x, batch_size=batch_size) for x in training_envs]
     test_generators = [data_generator(x) for x in test_envs]
     num_train_environments = len(train_generators)
     num_all_envs = num_train_environments + len(test_generators)
     filter_ratio = 0.2
 
-    num_uncertainty_predictions = 10
+    # num_uncertainty_predictions = 10
 
     # For each epoch
     for i in range(num_epochs):
-        # Get the batch data from all the training environments
-        env_x = []
-        env_y = []
-        env_t = []
-        env_c = []
 
-        for gen in train_generators:
+        # Train each classifier on its own environment
+        for e_i, gen in enumerate(train_generators):
             x, y, t, c = next(gen)
-            env_x.append(x)
-            env_y.append(y)
-            env_t.append(t)
-            env_c.append(c)
+            n = train_env_models[e_i]['network']
+            o = train_env_models[e_i]['optimizer']
+            preds = n(x)
+            env_loss = F.cross_entropy(preds, y.flatten().long())
+            o.zero_grad()
+            env_loss.backward()
+            o.step()
 
-        combined_x = torch.vstack(env_x)
-        combined_y = torch.cat(env_y)
-        combined_t = torch.cat(env_t)
+        # Get the most confident predictions in the test environments
+        for test_i, test_gen in enumerate(test_generators):
+            x, y, t, c = next(test_gen)
+            env_preds = []
+            for train_i, train_model in enumerate(train_env_models):
+                env_preds.append(train_model['network'](x).detach())
 
-        num_total_samples = len(combined_x)
-        num_filtered_samples = int(num_total_samples * filter_ratio)
+            env_preds.append(network(x).detach())
 
-        # get multiple predictions by changing the dropouts(How many) (detach)
-        prediction_list = []
-        for j in range(num_uncertainty_predictions):
-            prediction_list.append(network(combined_x).detach())
+            # Get the samples with most confidence
+            env_preds = torch.stack(env_preds)
 
-        prediction_list = torch.stack(prediction_list)
-        # find the variation between the sample predictions
-        variation = torch.mean(torch.var(prediction_list, axis=0), axis=1)
-        sorted_variation = torch.sort(variation)
-        sorted_indices = sorted_variation.indices
+            variation = torch.mean(torch.var(env_preds, axis=0), axis=1)
+            sorted_variation = torch.sort(variation)
+            sorted_indices = sorted_variation.indices
+            important_indices = sorted_indices[:int(filter_ratio*len(x))]
 
-        # filter the samples which give the most stable predictions
-        important_indices = sorted_indices[:num_filtered_samples]
-        filtered_samples = combined_x[important_indices]
-        filtered_labels = combined_y[important_indices]
-        filtered_true = combined_t[important_indices]
+            silver_labels = torch.argmax(torch.mean(env_preds, axis=0), axis=1).long()
+            loss = F.cross_entropy(network(x[important_indices]), silver_labels[important_indices].flatten().long())
 
-        # Filter only the samples where the label matches the predicted label
-        mean_predictions = torch.mean(prediction_list, axis=0)
-        correct_predictions = torch.argmax(mean_predictions[important_indices], axis=1) == filtered_labels.flatten()
-        incorrect_predictions = torch.argmax(mean_predictions[important_indices], axis=1) != filtered_labels.flatten()
-        correct_indices = important_indices[correct_predictions]
-        incorrect_indices = important_indices[incorrect_predictions]
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-        # Iterate on the most well defined(get the loss)
-        loss = F.cross_entropy(network(combined_x[incorrect_indices]), combined_y[incorrect_indices].flatten().long())
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        if i % 10 == 0:
-            # Percentage of mislabels in actual batch
-            p_correct = torch.sum(((combined_y == combined_t).float()))/len(combined_y)
-            print(f'% correct labels: {p_correct}')
-            # Percentage filtered correct
-            p_filtered_correct = torch.sum(((filtered_labels == filtered_true).float()))/len(filtered_labels)
-            print(f'% correct filtered: {p_filtered_correct}')
-            # Print the loss
-            print(f'Loss: {loss.item()}')
-            # Print the accuracy for the training environments
-            print(f'Accuracy: {mean_accuracy(network(combined_x), combined_y.flatten().long())}')
-            # Print the accuracy for the test environments
+        if i % 100 == 0:
             t_x, t_y, _, _ = next(test_generators[0])
             print(f'Test Accuracy: {mean_accuracy(network(t_x), t_y.flatten().long())}')
+
+        # if i % 10 == 0:
+        #     # Percentage of mislabels in actual batch
+        #     p_correct = torch.sum(((combined_y == combined_t).float()))/len(combined_y)
+        #     print(f'% correct labels: {p_correct}')
+        #     # Percentage filtered correct
+        #     p_filtered_correct = torch.sum(((filtered_labels == filtered_true).float()))/len(filtered_labels)
+        #     print(f'% correct filtered: {p_filtered_correct}')
+        #     # Print the loss
+        #     print(f'Loss: {loss.item()}')
+        #     # Print the accuracy for the training environments
+        #     print(f'Accuracy: {mean_accuracy(network(combined_x), combined_y.flatten().long())}')
+        #     # Print the accuracy for the test environments
+        #     t_x, t_y, _, _ = next(test_generators[0])
+        #     print(f'Test Accuracy: {mean_accuracy(network(t_x), t_y.flatten().long())}')
 
 
 
