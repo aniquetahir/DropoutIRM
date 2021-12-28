@@ -192,7 +192,7 @@ def train_erm():
     num_train_environments = len(train_generators)
     num_all_envs = num_train_environments + len(test_generators)
     filter_ratio = 0.2
-    num_invariant_features = 64
+    num_invariant_features = 128
 
     num_uncertainty_predictions = 10
 
@@ -227,13 +227,15 @@ def train_erm():
         all_x = torch.vstack(env_x)
         all_y = torch.cat(env_y)
         preds = classifier(torch.vstack(env_feats))
-        loss = F.cross_entropy(preds, all_y.flatten().long()) + 1000 * invariant_xenv_variation
+        loss = F.cross_entropy(preds, all_y.flatten().long()) + 10000 * invariant_xenv_variation
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
         if i % 10 == 0:
+            for param in classifier.parameters():
+                param.requires_grad=False
             # Percentage of mislabels in actual batch
             # p_correct = torch.sum(((combined_y == combined_t).float()))/len(combined_y)
             # print(f'% correct labels: {p_correct}')
