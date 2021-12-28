@@ -72,6 +72,9 @@ for restart in range(flags.n_restarts):
     make_environment(mnist_val[0], mnist_val[1], 0.9)
   ]
 
+  train_envs = envs[:2]
+  test_envs = envs[2:]
+
   # Define and instantiate the model
   # TODO Add dropout to the model to try out the uncertainty idea
   class MLP(nn.Module):
@@ -96,6 +99,8 @@ for restart in range(flags.n_restarts):
       return out
 
   mlp = MLP().cuda()
+  mlp_final = MLP().cuda()
+
 
   # Define loss function helpers
 
@@ -124,6 +129,7 @@ for restart in range(flags.n_restarts):
     print("   ".join(str_values))
 
   optimizer = optim.Adam(mlp.parameters(), lr=flags.lr)
+  optimizer_test = optim.Adam(mlp_final.parameters(), lr=flags.lr)
 
   pretty_print('step', 'train nll', 'train acc', 'train penalty', 'test acc')
 
@@ -165,7 +171,28 @@ for restart in range(flags.n_restarts):
         train_penalty.detach().cpu().numpy(),
         test_acc.detach().cpu().numpy()
       )
+  # Now that the irm has been trained, we can use the confident inferences to pseudo label
+  num_confirmations = 10
+  t_env = test_envs[0]
+  pred_history = []
+  for i in range(num_confirmations):
+    # Get a batch from the test data
+    x = t_env['images']
+    # y = t_env['labels']
+    # Get the predictions
+    pred_logits = mlp(x).detach()
+    preds = torch.argmax(pred_logits, dim=1)
+    pred_history.append(preds)
+  # Calculate the variation between the predictions
+  pred_variation = torch.stack(pred_history).var()
+  modal_prediction = torch.mode(pred_history)
 
+  hci = torch.sort(pred_variation).indices # highest confidence indices
+  # TODO check how many of the most confident predictions match with the ground truth
+  gt_preds = t_env['labels']
+  confidence_accuracy = (gt_preds[hci] == modal_prediction[hci]).long()/len(hci)
+  print(f'Confidence Accuracy: {confidence_accuracy}')
+  # Train a new model on the most confident data
   final_train_accs.append(train_acc.detach().cpu().numpy())
   final_test_accs.append(test_acc.detach().cpu().numpy())
   print('Final train acc (mean/std across restarts so far):')
