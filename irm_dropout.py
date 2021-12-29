@@ -198,7 +198,7 @@ for restart in range(flags.n_restarts):
 
   # Train a new model on the most confident data
   new_x = t_env['images'][hci[:num_filtered_samples]]
-  new_y = t_env['labels'][hci[:num_filtered_samples]]
+  new_y = (mean_prediction[hci] > 0.).float()
 
   for step in range(flags.steps):
     logits = mlp_final(new_x)
