@@ -101,7 +101,6 @@ for restart in range(flags.n_restarts):
   mlp = MLP().cuda()
   mlp_final = MLP().cuda()
 
-
   # Define loss function helpers
 
   def mean_nll(logits, y):
@@ -129,7 +128,7 @@ for restart in range(flags.n_restarts):
     print("   ".join(str_values))
 
   optimizer = optim.Adam(mlp.parameters(), lr=flags.lr)
-  optimizer_test = optim.Adam(mlp_final.parameters(), lr=flags.lr)
+  optimizer_final = optim.Adam(mlp_final.parameters(), lr=flags.lr)
 
   pretty_print('step', 'train nll', 'train acc', 'train penalty', 'test acc')
 
@@ -175,24 +174,42 @@ for restart in range(flags.n_restarts):
   num_confirmations = 10
   t_env = test_envs[0]
   pred_history = []
+  filter_percent = 0.3
   for i in range(num_confirmations):
     # Get a batch from the test data
     x = t_env['images']
     # y = t_env['labels']
     # Get the predictions
     pred_logits = mlp(x).detach()
-    preds = torch.argmax(pred_logits, dim=1)
-    pred_history.append(preds)
+    # preds = torch.argmax(pred_logits, dim=1)
+    pred_history.append(pred_logits)
   # Calculate the variation between the predictions
-  pred_variation = torch.stack(pred_history).var()
-  modal_prediction = torch.mode(pred_history)
+  pred_history = torch.stack(pred_history)
+  pred_variation = pred_history.var(axis=0)
+  # modal_prediction = torch.mode(pred_history)
+  mean_prediction = torch.mean(pred_history, dim=0)
 
-  hci = torch.sort(pred_variation).indices # highest confidence indices
+  hci = torch.sort(pred_variation.flatten()).indices # highest confidence indices
+  num_filtered_samples = int(len(hci) * filter_percent)
   # TODO check how many of the most confident predictions match with the ground truth
-  gt_preds = t_env['labels']
-  confidence_accuracy = (gt_preds[hci] == modal_prediction[hci]).long()/len(hci)
-  print(f'Confidence Accuracy: {confidence_accuracy}')
+  # gt_preds = t_env['labels']
+  # confidence_accuracy = mean_accuracy(mean_prediction[hci], gt_preds[hci]) # (gt_preds[hci] == modal_prediction[hci]).long()/len(hci)
+  # print(f'Confidence Accuracy: {confidence_accuracy}')
+
   # Train a new model on the most confident data
+  new_x = t_env['images'][hci[:num_filtered_samples]]
+  new_y = t_env['labels'][hci[:num_filtered_samples]]
+
+  for step in range(flags.steps):
+    logits = mlp_final(new_x)
+    nll = mean_nll(logits, new_y)
+    optimizer_final.zero_grad()
+    nll.backward()
+    optimizer_final.step()
+    if step % 100 == 0:
+      print(f'Test Accuracy: {mean_accuracy(mlp_final(t_env["images"]), t_env["labels"])}')
+
+
   final_train_accs.append(train_acc.detach().cpu().numpy())
   final_test_accs.append(test_acc.detach().cpu().numpy())
   print('Final train acc (mean/std across restarts so far):')
