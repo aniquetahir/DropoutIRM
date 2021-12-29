@@ -174,6 +174,7 @@ for restart in range(flags.n_restarts):
   num_confirmations = 10
   t_env = test_envs[0]
   pred_history = []
+  pred_logits_history = []
   filter_percent = 0.3
   for i in range(num_confirmations):
     # Get a batch from the test data
@@ -182,12 +183,14 @@ for restart in range(flags.n_restarts):
     # Get the predictions
     pred_logits = mlp(x).detach()
     # preds = torch.argmax(pred_logits, dim=1)
-    pred_history.append(pred_logits)
+    pred_history.append((pred_logits > 0.).float())
+    pred_logits_history.append(pred_logits)
   # Calculate the variation between the predictions
   pred_history = torch.stack(pred_history)
+  pred_logits_history = torch.stack(pred_logits_history)
   pred_variation = pred_history.var(axis=0)
   # modal_prediction = torch.mode(pred_history)
-  mean_prediction = torch.mean(pred_history, dim=0)
+  mean_prediction = torch.mean(pred_logits_history, dim=0)
 
   hci = torch.sort(pred_variation.flatten()).indices # highest confidence indices
   num_filtered_samples = int(len(hci) * filter_percent)
@@ -198,7 +201,7 @@ for restart in range(flags.n_restarts):
 
   # Train a new model on the most confident data
   new_x = t_env['images'][hci[:num_filtered_samples]]
-  new_y = (mean_prediction[hci] > 0.).float()
+  new_y = (mean_prediction[hci[:num_filtered_samples]] > 0.).float()
 
   for step in range(flags.steps):
     logits = mlp_final(new_x)
@@ -207,7 +210,9 @@ for restart in range(flags.n_restarts):
     nll.backward()
     optimizer_final.step()
     if step % 100 == 0:
+      mlp_final.eval()
       print(f'Test Accuracy: {mean_accuracy(mlp_final(t_env["images"]), t_env["labels"])}')
+      mlp_final.train()
 
 
   final_train_accs.append(train_acc.detach().cpu().numpy())
