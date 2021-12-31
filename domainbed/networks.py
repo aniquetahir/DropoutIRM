@@ -125,7 +125,7 @@ class MNIST_CNN(nn.Module):
     """
     n_outputs = 128
 
-    def __init__(self, input_shape):
+    def __init__(self, input_shape, dropout=0.):
         super(MNIST_CNN, self).__init__()
         self.conv1 = nn.Conv2d(input_shape[0], 64, 3, 1, padding=1)
         self.conv2 = nn.Conv2d(64, 128, 3, stride=2, padding=1)
@@ -137,24 +137,33 @@ class MNIST_CNN(nn.Module):
         self.bn2 = nn.GroupNorm(8, 128)
         self.bn3 = nn.GroupNorm(8, 128)
 
+        self.dp0 = nn.Dropout(dropout)
+        self.dp1 = nn.Dropout(dropout)
+        self.dp2 = nn.Dropout(dropout)
+        self.dp3 = nn.Dropout(dropout)
+
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
     def forward(self, x):
         x = self.conv1(x)
         x = F.relu(x)
         x = self.bn0(x)
+        x = self.dp0(x)
 
         x = self.conv2(x)
         x = F.relu(x)
         x = self.bn1(x)
+        x = self.dp1(x)
 
         x = self.conv3(x)
         x = F.relu(x)
         x = self.bn2(x)
+        x = self.dp2(x)
 
         x = self.conv4(x)
         x = F.relu(x)
         x = self.bn3(x)
+        x = self.dp3(x)
 
         x = self.avgpool(x)
         x = x.view(len(x), -1)
@@ -193,6 +202,20 @@ def Featurizer(input_shape, hparams):
         return ResNet(input_shape, hparams)
     else:
         raise NotImplementedError
+
+def FeaturizerDropout(input_shape, hparams):
+    dropout = hparams['mlp_dropout']
+    if len(input_shape) == 1:
+        return MLP(input_shape[0], hparams["mlp_width"], hparams)
+    elif input_shape[1:3] == (28, 28):
+        return MNIST_CNN(input_shape, hparams['mlp_dropout'])
+    elif input_shape[1:3] == (32, 32):
+        return NotImplementedError # wide_resnet.Wide_ResNet(input_shape, 16, 2, 0.)
+    elif input_shape[1:3] == (224, 224):
+        return NotImplementedError # ResNet(input_shape, hparams)
+    else:
+        raise NotImplementedError
+
 
 
 def Classifier(in_features, out_features, is_nonlinear=False):

@@ -157,7 +157,16 @@ if __name__ == "__main__":
         batch_size=hparams['batch_size'],
         num_workers=dataset.N_WORKERS)
         for i, (env, env_weights) in enumerate(uda_splits)
-        if i in args.test_envs]
+        # if i in args.test_envs
+    ]
+
+    ood_loader = [InfiniteDataLoader(
+        dataset=env,
+        weights=None,
+        batch_size=hparams['batch_size'],
+        num_workers=dataset.N_WORKERS)
+        for i, (env, env_weights) in enumerate(uda_splits)
+    ]
 
     eval_loaders = [FastDataLoader(
         dataset=env,
@@ -234,8 +243,10 @@ if __name__ == "__main__":
                 acc = misc.accuracy(algorithm, loader, weights, device)
                 results[name+'_acc'] = acc
 
-            # results['mem_gb'] = torch.cuda.max_memory_allocated() / (1024.*1024.*1024.)
-            results['mem_gb'] = 20
+            if device == 'cuda':
+                results['mem_gb'] = torch.cuda.max_memory_allocated() / (1024.*1024.*1024.)
+            else:
+                results['mem_gb'] = 0.
 
             results_keys = sorted(results.keys())
             if results_keys != last_results_keys:
@@ -259,6 +270,20 @@ if __name__ == "__main__":
 
             if args.save_model_every_checkpoint:
                 save_checkpoint(f'model_step{step}.pkl')
+
+    # Use the model to find the most confident samples in the test environment
+    num_conf_iters = hparams['num_confidence_runs']
+    prediction_history = []
+    # get batch of test data
+    data_batch = [x for x, _ in next(uda_minibatches_iterator)]
+
+    for i in range(prediction_history):
+        prediction = algorithm.predict(torch.vstack(data_batch))
+
+        pass
+
+    # Use the most confident samples to train an ERM model
+
 
     save_checkpoint('model.pkl')
 
