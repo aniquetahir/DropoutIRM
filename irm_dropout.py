@@ -32,10 +32,10 @@ final_train_accs = []
 final_test_accs = []
 
 
-def self_distill(trained_model, train_envs, test_envs, steps, lr, num_confirmations=10, filter_ratio=0.3):
+def self_distill(trained_model, train_envs, test_envs, steps, lr, deepness=6, num_confirmations=10, filter_ratio=0.3):
     # define the current model
     current_model = trained_model
-    while True:
+    for d in range(deepness):
         pred_history = []
         pred_logits_history = []
         x = [y for x in test_envs for y in x['images']]
@@ -47,7 +47,7 @@ def self_distill(trained_model, train_envs, test_envs, steps, lr, num_confirmati
 
         # define the distilled model
         distilled_model = MLP().cuda()
-        optimizer = optim.Adam(distilled_model.parameters(), lr=lr * 0.01)
+        optimizer = optim.Adam(distilled_model.parameters(), lr=lr)
 
         # pseudo label the test data
         for i in range(num_confirmations):
@@ -77,17 +77,17 @@ def self_distill(trained_model, train_envs, test_envs, steps, lr, num_confirmati
             optimizer.zero_grad()
             nll.backward()
             optimizer.step()
-            if step % 100 == 0:
-                print('=' * 10)
+            if step % 300 == 0:
+                # print('=' * 10)
                 distilled_model.eval()
-                print(f'--> Test Accuracy: {mean_accuracy(distilled_model(x), y)}')
+                print(f'--> Test Accuracy: {mean_accuracy(distilled_model(x).detach(), y)}')
                 distilled_model.train()
 
         # update the current model
         current_model = distilled_model
-        print(f'Final Test Accuracy: {mean_accuracy(distilled_model(x), y)}')
+        print(f'Final Test Accuracy: {mean_accuracy(distilled_model(x).detach(), y)}')
         pass
-    pass
+    return current_model
 
 
 for restart in range(flags.n_restarts):
@@ -110,10 +110,8 @@ for restart in range(flags.n_restarts):
     def make_environment(images, labels, e):
         def torch_bernoulli(p, size):
             return (torch.rand(size) < p).float()
-
         def torch_xor(a, b):
-            return (a - b).abs()  # Assumes both inputs are either 0 or 1
-
+            return (a-b).abs() # Assumes both inputs are either 0 or 1
         # 2x subsample for computational convenience
         images = images.reshape((-1, 28, 28))[:, ::2, ::2]
         # Assign a binary label based on the digit; flip label with probability 0.25
@@ -123,12 +121,11 @@ for restart in range(flags.n_restarts):
         colors = torch_xor(labels, torch_bernoulli(e, len(labels)))
         # Apply the color to the image by zeroing out the other color channel
         images = torch.stack([images, images], dim=1)
-        images[torch.tensor(range(len(images))), (1 - colors).long(), :, :] *= 0
+        images[torch.tensor(range(len(images))), (1-colors).long(), :, :] *= 0
         return {
             'images': (images.float() / 255.).cuda(),
             'labels': labels[:, None].cuda()
         }
-
 
     envs = [
         make_environment(mnist_train[0][::2], mnist_train[1][::2], 0.2),
@@ -136,8 +133,9 @@ for restart in range(flags.n_restarts):
         make_environment(mnist_val[0], mnist_val[1], 0.9)
     ]
 
-    train_envs = envs[:2]
-    test_envs = envs[2:]
+
+    train_envs = [envs[0], envs[1]]
+    test_envs = [envs[2]]
 
 
     # Define and instantiate the model
@@ -246,54 +244,13 @@ for restart in range(flags.n_restarts):
                 test_acc.detach().cpu().numpy()
             )
 
-    self_distill(mlp, train_envs, test_envs, flags.steps, flags.lr)
     # Now that the irm has been trained, we can use the confident inferences to pseudo label
-    num_confirmations = 10
-    t_env = test_envs[0]
-    pred_history = []
-    pred_logits_history = []
-    filter_percent = 0.3
-    for i in range(num_confirmations):
-        # Get a batch from the test data
-        x = t_env['images']
-        # y = t_env['labels']
-        # Get the predictions
-        pred_logits = mlp(x).detach()
-        # preds = torch.argmax(pred_logits, dim=1)
-        pred_history.append((pred_logits > 0.).float())
-        pred_logits_history.append(pred_logits)
-    # Calculate the variation between the predictions
-    pred_history = torch.stack(pred_history)
-    pred_logits_history = torch.stack(pred_logits_history)
-    pred_variation = pred_history.var(axis=0)
-    # modal_prediction = torch.mode(pred_history)
-    mean_prediction = torch.mean(pred_logits_history, dim=0)
+    self_distill(mlp, train_envs, test_envs, flags.steps*2, flags.lr * 0.01, num_confirmations=20, deepness=4)
 
-    hci = torch.sort(pred_variation.flatten()).indices  # highest confidence indices
-    num_filtered_samples = int(len(hci) * filter_percent)
-    # TODO check how many of the most confident predictions match with the ground truth
-    # gt_preds = t_env['labels']
-    # confidence_accuracy = mean_accuracy(mean_prediction[hci], gt_preds[hci]) # (gt_preds[hci] == modal_prediction[hci]).long()/len(hci)
-    # print(f'Confidence Accuracy: {confidence_accuracy}')
 
-    # Train a new model on the most confident data
-    new_x = t_env['images'][hci[:num_filtered_samples]]
-    new_y = (mean_prediction[hci[:num_filtered_samples]] > 0.).float()
-
-    for step in range(flags.steps):
-        logits = mlp_final(new_x)
-        nll = mean_nll(logits, new_y)
-        optimizer_final.zero_grad()
-        nll.backward()
-        optimizer_final.step()
-        if step % 100 == 0:
-            mlp_final.eval()
-            print(f'Test Accuracy: {mean_accuracy(mlp_final(t_env["images"]), t_env["labels"])}')
-            mlp_final.train()
-
-    final_train_accs.append(train_acc.detach().cpu().numpy())
-    final_test_accs.append(test_acc.detach().cpu().numpy())
-    print('Final train acc (mean/std across restarts so far):')
-    print(np.mean(final_train_accs), np.std(final_train_accs))
-    print('Final test acc (mean/std across restarts so far):')
-    print(np.mean(final_test_accs), np.std(final_test_accs))
+    # final_train_accs.append(train_acc.detach().cpu().numpy())
+    # final_test_accs.append(test_acc.detach().cpu().numpy())
+    # print('Final train acc (mean/std across restarts so far):')
+    # print(np.mean(final_train_accs), np.std(final_train_accs))
+    # print('Final test acc (mean/std across restarts so far):')
+    # print(np.mean(final_test_accs), np.std(final_test_accs))
