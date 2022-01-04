@@ -195,7 +195,7 @@ def Featurizer(input_shape, hparams):
     if len(input_shape) == 1:
         return MLP(input_shape[0], hparams["mlp_width"], hparams)
     elif input_shape[1:3] == (28, 28):
-        return MNIST_CNN(input_shape)
+        return MNIST_CNN(input_shape, hparams['mlp_dropout'])
     elif input_shape[1:3] == (32, 32):
         return wide_resnet.Wide_ResNet(input_shape, 16, 2, 0.)
     elif input_shape[1:3] == (224, 224):

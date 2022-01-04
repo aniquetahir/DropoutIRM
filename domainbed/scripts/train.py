@@ -12,6 +12,8 @@ import uuid
 import numpy as np
 import PIL
 import torch
+from torch import nn, optim
+import torch.nn.functional as F
 import torchvision
 import torch.utils.data
 
@@ -20,6 +22,114 @@ from domainbed import hparams_registry
 from domainbed import algorithms
 from domainbed.lib import misc
 from domainbed.lib.fast_data_loader import InfiniteDataLoader, FastDataLoader
+
+from domainbed.networks import FeaturizerDropout, Classifier
+
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+def mean_nll(logits, y):
+    return nn.functional.binary_cross_entropy_with_logits(logits, y)
+
+
+# TODO fix this for multiclass classification
+def mean_accuracy(logits, y):
+    pred_class = torch.argmax(logits, dim=1)
+    return (pred_class==y).float().mean()
+
+
+def self_distill(hparams, input_shape, num_classes, trained_model, train_loaders, test_loaders, steps, lr, deepness=6, num_confirmations=10, filter_ratio=0.3):
+    # define the current model
+    num_epochs = 10
+    current_model = trained_model
+    for d in range(deepness):
+        pred_history = []
+        pred_logits_history = []
+        # x = []
+        # y = []
+        # for z in test_loaders:
+        #     for i, (m_x, m_y) in enumerate(z):
+        #         x.append(m_x)
+        #         y.append(m_y)
+        #         if i>data_limit:
+        #             break
+
+        # test_data = [(x, y) for z in test_loaders for x, y in z]
+        # x, y = list(zip(*test_data))
+        # x = [y for x in test_envs for y in x['images']]
+        # y = [y for x in test_envs for y in x['labels']]
+        # x = torch.stack(x)
+        # y = torch.stack(y)
+
+        # TODO incorporate test data
+
+
+        # define the distilled model
+        # sample_train_x, _ = next(iter(train_loaders[0]))
+        featurizer = FeaturizerDropout(input_shape, hparams)
+        classifier = Classifier(featurizer.n_outputs, num_classes, hparams['nonlinear_classifier'])
+        distilled_model = torch.nn.Sequential(featurizer, classifier).to(device) #.cuda()
+        optimizer = optim.Adam(distilled_model.parameters(), lr=lr)
+
+        # pseudo label the test data
+        x = []
+        y = []
+        for j in test_loaders:
+            for i, (m_x, m_y) in enumerate(j):
+                x.append(m_x)
+                y.append(m_y)
+                if i > num_epochs:
+                    break
+        x = torch.vstack(x)
+        y = torch.cat(y)
+
+        for i in range(num_confirmations):
+            with torch.no_grad():
+                pred_logits = current_model(x).detach()
+                pred_history.append(torch.argmax(pred_logits, axis=1))
+                pred_logits_history.append((pred_logits))
+
+        # filter the top confidence samples from the test data
+        pred_history = torch.stack(pred_history)
+        pred_logits_history = torch.stack(pred_logits_history)
+        pred_variation = pred_history.float().var(axis=0)
+
+        mean_prediction = torch.mean(pred_logits_history, dim = 0)
+        modal_prediction = torch.mode(pred_history, dim=0).values
+
+        hci = torch.sort(pred_variation.flatten()).indices
+        num_filtered_samples = int(len(hci) * filter_ratio)
+
+        zero_var_sample_indices = torch.where(pred_variation == 0)[0]
+        if len(zero_var_sample_indices) > num_filtered_samples:
+            hci = zero_var_sample_indices
+            num_filtered_samples = len(zero_var_sample_indices)
+
+        new_x = x[hci[:num_filtered_samples]]
+        new_y = modal_prediction[hci[:num_filtered_samples]]
+        new_gt_y = y[hci[:num_filtered_samples]]
+
+        # For logging purposes, print the accuracy of the most confident predictions
+
+
+        # train on the top confidence samples
+        for step in range(steps):
+            logits = distilled_model(new_x)
+            nll = F.cross_entropy(logits, new_y)  # mean_nll(logits, new_y)
+            optimizer.zero_grad()
+            nll.backward()
+            optimizer.step()
+            if step % 300 == 0:
+                # print('=' * 10)
+                distilled_model.eval()
+                print(f'--> Test Accuracy: {mean_accuracy(distilled_model(x).detach(), y)}')
+                distilled_model.train()
+
+        # update the current model
+        current_model = distilled_model
+        print(f'Final Test Accuracy: {mean_accuracy(distilled_model(x).detach(), y)}')
+        pass
+    return current_model
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Domain generalization')
@@ -272,14 +382,17 @@ if __name__ == "__main__":
                 save_checkpoint(f'model_step{step}.pkl')
 
     # Use the model to find the most confident samples in the test environment
+    self_distill(hparams, dataset.input_shape, dataset.num_classes, algorithm.network, train_loaders, uda_loaders, n_steps, hparams['lr'] * 0.01)
+
+
     num_conf_iters = hparams['num_confidence_runs']
     prediction_history = []
+
     # get batch of test data
     data_batch = [x for x, _ in next(uda_minibatches_iterator)]
 
     for i in range(prediction_history):
         prediction = algorithm.predict(torch.vstack(data_batch))
-
         pass
 
     # Use the most confident samples to train an ERM model
