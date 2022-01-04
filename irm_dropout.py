@@ -96,9 +96,9 @@ def self_distill(trained_model, train_envs, test_envs, steps, lr, deepness=6, nu
                     xtr = env['images']
                     ytr = env['labels']
                     with torch.no_grad():
-                        distill_train_accuracy_hist.append(abs(mean_accuracy(distilled_model(xtr), ytr)-random_chance_accuracy))
-                distill_train_accuracy_diff = np.mean(distill_train_accuracy_hist)
-
+                        distill_train_accuracy_hist.append(abs(mean_accuracy(distilled_model(xtr), ytr).item()-random_chance_accuracy))
+                distill_train_accuracy_diff = np.max(distill_train_accuracy_hist)
+                print(distill_train_accuracy_diff, end=' ')
                 # compare the current model with the previous model on the training data
                 # if the current model is near random chance
                 if distill_train_accuracy_diff < previous_model_rchance_diff:
@@ -106,11 +106,18 @@ def self_distill(trained_model, train_envs, test_envs, steps, lr, deepness=6, nu
                     distilled_model.load_state_dict(previous_model_state)
                     # decrease the learning rate
                     for group in optimizer.param_groups:
-                        group['lr'] = group['lr']/2.
+                        # pass
+                        group['lr'] = group['lr'] * 0.95
+                else:
+                    for group in optimizer.param_groups:
+                        # According to observation, learning seldom goes in the correct direction once it starts to fail
+                        # pass
+                        group['lr'] = group['lr'] * 1.05
 
                 previous_model_rchance_diff = distill_train_accuracy_diff
                 previous_model_state = copy.deepcopy(distilled_model.state_dict())
             if step % 300 == 0:
+                print('')
                 # print('=' * 10)
                 with torch.no_grad():
                     distilled_model.eval()
@@ -120,12 +127,13 @@ def self_distill(trained_model, train_envs, test_envs, steps, lr, deepness=6, nu
                     for i, env in enumerate(train_envs):
                         xtr = env['images']
                         ytr = env['labels']
-                        print(f'--> Train{i} Accuracy: {mean_accuracy(distilled_model(xtr), ytr)}')
+                        # print(f'--> Train{i} Accuracy: {mean_accuracy(distilled_model(xtr), ytr)}')
 
 
         # update the current model
         current_model = distilled_model
         print(f'Final Test Accuracy: {mean_accuracy(distilled_model(x).detach(), y)}')
+        print('=' * 20)
         pass
     return current_model
 
@@ -285,7 +293,7 @@ for restart in range(flags.n_restarts):
             )
 
     # Now that the irm has been trained, we can use the confident inferences to pseudo label
-    self_distill(mlp, train_envs, test_envs, flags.steps*2, flags.lr * 0.01, num_confirmations=20, deepness=4)
+    self_distill(mlp, train_envs, test_envs, flags.steps*6, flags.lr * 0.01, num_confirmations=20, deepness=4)
 
 
     # final_train_accs.append(train_acc.detach().cpu().numpy())
