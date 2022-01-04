@@ -10,6 +10,7 @@ import numpy as np
 import torch
 from torchvision import datasets
 from torch import nn, optim, autograd
+import copy
 
 parser = argparse.ArgumentParser(description='Colored MNIST')
 parser.add_argument('--hidden_dim', type=int, default=256)
@@ -24,6 +25,8 @@ flags = parser.parse_args()
 
 GLOBAL_DROPOUT_RATE = 0.5
 
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
 print('Flags:')
 for k, v in sorted(vars(flags).items()):
     print("\t{}: {}".format(k, v))
@@ -33,6 +36,8 @@ final_test_accs = []
 
 
 def self_distill(trained_model, train_envs, test_envs, steps, lr, deepness=6, num_confirmations=10, filter_ratio=0.3):
+    num_classes = 2.
+    random_chance_accuracy = 1./num_classes
     # define the current model
     current_model = trained_model
     for d in range(deepness):
@@ -46,14 +51,15 @@ def self_distill(trained_model, train_envs, test_envs, steps, lr, deepness=6, nu
         # TODO incorporate test data
 
         # define the distilled model
-        distilled_model = MLP().cuda()
+        distilled_model = MLP().to(device)
         optimizer = optim.Adam(distilled_model.parameters(), lr=lr)
 
         # pseudo label the test data
         for i in range(num_confirmations):
-            pred_logits = current_model(x).detach()
-            pred_history.append((pred_logits > 0.).float())
-            pred_logits_history.append((pred_logits))
+            with torch.no_grad():
+                pred_logits = current_model(x).detach()
+                pred_history.append((pred_logits > 0.).float())
+                pred_logits_history.append((pred_logits))
 
         # filter the top confidence samples from the test data
         pred_history = torch.stack(pred_history)
@@ -71,12 +77,39 @@ def self_distill(trained_model, train_envs, test_envs, steps, lr, deepness=6, nu
         new_gt_y = y[hci[:num_filtered_samples]]
 
         # train on the top confidence samples
+        previous_model_state = copy.deepcopy(distilled_model.state_dict())
+        previous_model_rchance_diff = 0.
+
         for step in range(steps):
+
             logits = distilled_model(new_x)
             nll = mean_nll(logits, new_y)
             optimizer.zero_grad()
             nll.backward()
             optimizer.step()
+            if step % 10 == 0:
+                # keep a copy of the models parameters
+                # current_model_state = copy.deepcopy(distilled_model.state_dict())
+                # get the training env accuracy for the current model
+                distill_train_accuracy_hist = []
+                for env in train_envs:
+                    xtr = env['images']
+                    ytr = env['labels']
+                    with torch.no_grad():
+                        distill_train_accuracy_hist.append(abs(mean_accuracy(distilled_model(xtr), ytr)-random_chance_accuracy))
+                distill_train_accuracy_diff = np.mean(distill_train_accuracy_hist)
+
+                # compare the current model with the previous model on the training data
+                # if the current model is near random chance
+                if distill_train_accuracy_diff < previous_model_rchance_diff:
+                    # Revert the model
+                    distilled_model.load_state_dict(previous_model_state)
+                    # decrease the learning rate
+                    for group in optimizer.param_groups:
+                        group['lr'] = group['lr']/2.
+
+                previous_model_rchance_diff = distill_train_accuracy_diff
+                previous_model_state = copy.deepcopy(distilled_model.state_dict())
             if step % 300 == 0:
                 # print('=' * 10)
                 with torch.no_grad():
@@ -130,8 +163,8 @@ for restart in range(flags.n_restarts):
         images = torch.stack([images, images], dim=1)
         images[torch.tensor(range(len(images))), (1-colors).long(), :, :] *= 0
         return {
-            'images': (images.float() / 255.).cuda(),
-            'labels': labels[:, None].cuda()
+            'images': (images.float() / 255.).to(device),
+            'labels': labels[:, None].to(device)
         }
 
     envs = [
@@ -171,8 +204,8 @@ for restart in range(flags.n_restarts):
             return out
 
 
-    mlp = MLP().cuda()
-    mlp_final = MLP().cuda()
+    mlp = MLP().to(device)
+    mlp_final = MLP().to(device)
 
 
     # Define loss function helpers
@@ -187,7 +220,7 @@ for restart in range(flags.n_restarts):
 
 
     def penalty(logits, y):
-        scale = torch.tensor(1.).cuda().requires_grad_()
+        scale = torch.tensor(1.).to(device).requires_grad_()
         loss = mean_nll(logits * scale, y)
         grad = autograd.grad(loss, [scale], create_graph=True)[0]
         return torch.sum(grad ** 2)
@@ -224,7 +257,7 @@ for restart in range(flags.n_restarts):
         train_acc = torch.stack([envs[0]['acc'], envs[1]['acc']]).mean()
         train_penalty = torch.stack([envs[0]['penalty'], envs[1]['penalty']]).mean()
 
-        weight_norm = torch.tensor(0.).cuda()
+        weight_norm = torch.tensor(0.).to(device)
         for w in mlp.parameters():
             weight_norm += w.norm().pow(2)
 
