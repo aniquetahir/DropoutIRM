@@ -79,9 +79,16 @@ def self_distill(trained_model, train_envs, test_envs, steps, lr, deepness=6, nu
             optimizer.step()
             if step % 300 == 0:
                 # print('=' * 10)
-                distilled_model.eval()
-                print(f'--> Test Accuracy: {mean_accuracy(distilled_model(x).detach(), y)}')
-                distilled_model.train()
+                with torch.no_grad():
+                    distilled_model.eval()
+                    print(f'--> Test Accuracy: {mean_accuracy(distilled_model(x).detach(), y)}')
+                    distilled_model.train()
+                    # How does the distilled model perform on the training data
+                    for i, env in enumerate(train_envs):
+                        xtr = env['images']
+                        ytr = env['labels']
+                        print(f'--> Train{i} Accuracy: {mean_accuracy(distilled_model(xtr), ytr)}')
+
 
         # update the current model
         current_model = distilled_model
