@@ -309,6 +309,8 @@ if __name__ == "__main__":
     n_steps = args.steps or dataset.N_STEPS
     checkpoint_freq = args.checkpoint_freq or dataset.CHECKPOINT_FREQ
 
+    distilled_model = None
+
     def save_checkpoint(filename):
         if args.skip_model_save:
             return
@@ -318,7 +320,8 @@ if __name__ == "__main__":
             "model_num_classes": dataset.num_classes,
             "model_num_domains": len(dataset) - len(args.test_envs),
             "model_hparams": hparams,
-            "model_dict": algorithm.state_dict()
+            "model_dict": algorithm.state_dict(),
+            "distilled_model": None if distilled_model is None else distilled_model.state_dict()
         }
         torch.save(save_dict, os.path.join(args.output_dir, filename))
 
