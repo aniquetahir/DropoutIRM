@@ -58,7 +58,7 @@ def _hparams(algorithm, dataset, random_seed):
     elif algorithm == "SagNet":
         _hparam('sag_w_adv', 0.1, lambda r: 10**r.uniform(-2, 1))
 
-    elif algorithm == "IRM":
+    elif algorithm == "IRM" or algorithm == "DropoutIRM":
         _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))
         _hparam('irm_penalty_anneal_iters', 500,
                 lambda r: int(10**r.uniform(0, 4)))

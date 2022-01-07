@@ -26,6 +26,7 @@ ALGORITHMS = [
     'ERM',
     'Fish',
     'IRM',
+    'DropoutIRM',
     'GroupDRO',
     'Mixup',
     'MLDG',
@@ -614,7 +615,7 @@ class DropoutIRM(IRM):
         self.num_classes = num_classes
 
     @staticmethod
-    def self_distill(hparams, input_shape, num_classes, trained_model, train_loaders, test_batch, steps, lr, deepness=6, num_confirmations=10, filter_ratio=0.3):
+    def self_distill(hparams, input_shape, num_classes, trained_model, train_loaders, test_batch, steps, lr, deepness=4, num_confirmations=10, filter_ratio=0.3):
         # define the current model
         def mean_accuracy(logits, y):
             logits_to_y = torch.argmax(logits, dim=1)
@@ -653,8 +654,8 @@ class DropoutIRM(IRM):
             optimizer = torch.optim.Adam(distilled_model.parameters(), lr=lr)
 
             # pseudo label the test data
-            x = []
-            y = []
+            # x = []
+            # y = []
             # for j in test_loaders:
             #     for i, (m_x, m_y) in enumerate(j):
             #         x.append(m_x)
@@ -688,7 +689,7 @@ class DropoutIRM(IRM):
 
             new_x = x[hci[:num_filtered_samples]]
             new_y = modal_prediction[hci[:num_filtered_samples]]
-            new_gt_y = y[hci[:num_filtered_samples]]
+            # new_gt_y = y[hci[:num_filtered_samples]]
 
             # For logging purposes, print the accuracy of the most confident predictions
 
@@ -700,21 +701,23 @@ class DropoutIRM(IRM):
                 optimizer.zero_grad()
                 nll.backward()
                 optimizer.step()
-                if step % 300 == 0:
-                    # print('=' * 10)
-                    distilled_model.eval()
-                    print(f'--> Test Accuracy: {mean_accuracy(distilled_model(x).detach(), y)}')
-                    distilled_model.train()
+                # if step % 300 == 0:
+                #     # print('=' * 10)
+                #     distilled_model.eval()
+                #     # print(f'--> Test Accuracy: {mean_accuracy(distilled_model(x).detach(), y)}')
+                #     distilled_model.train()
 
             # update the current model
             current_model = distilled_model
-            print(f'Final Test Accuracy: {mean_accuracy(distilled_model(x).detach(), y)}')
+            # print(f'Final Test Accuracy: {mean_accuracy(distilled_model(x).detach(), y)}')
             pass
         return current_model
 
     def predict(self, x):
+        self.network.train()
         # self distill based on the provided data
-        distilled_model = self.self_distill(self.hparams, self.input_shape, self.num_classes, self.network, None, 100, self.hparams['lr']*0.01)
+        distilled_model = self.self_distill(self.hparams, self.input_shape, self.num_classes, self.network, None, x, 50, self.hparams['lr']*0.01)
+        self.network.eval()
 
         # apply the self distilled model on the data to get the class
         distilled_model(x)
