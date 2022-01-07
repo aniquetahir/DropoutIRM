@@ -260,48 +260,60 @@ if __name__ == "__main__":
             if args.save_model_every_checkpoint:
                 save_checkpoint(f'model_step{step}.pkl')
 
-    # Finally distill the model
-    torch.cuda.empty_cache()
-    print('Distilling...')
+    for step in range(start_step, n_steps):
+        step_start_time = time.time()
+        minibatches_device = [(x.to(device), y.to(device))
+                              for x,y in next(train_minibatches_iterator)]
+        if args.task == "domain_adaptation":
+            uda_device = [x.to(device)
+                          for x,_ in next(uda_minibatches_iterator)]
+        else:
+            uda_device = None
+        # step_vals = algorithm.update(minibatches_device, uda_device)
+        checkpoint_vals['step_time'].append(time.time() - step_start_time)
 
-    results = {
-        'step': step + 1,
-        'epoch': step + 1/ steps_per_epoch,
-    }
+        for key, val in step_vals.items():
+            checkpoint_vals[key].append(val)
 
-    for key, val in checkpoint_vals.items():
-        results[key] = np.mean(val)
+        if (step % checkpoint_freq == 0) or (step == n_steps - 1):
+            results = {
+                'step': step,
+                'epoch': step / steps_per_epoch,
+            }
 
-    evals = zip(eval_loader_names, eval_loaders, eval_weights)
-    for name, loader, weights in evals:
-        acc = misc.accuracy(algorithm, loader, weights, device, no_distill=False)
-        results[name+'_acc'] = acc
+            for key, val in checkpoint_vals.items():
+                results[key] = np.mean(val)
 
-    results['mem_gb'] = torch.cuda.max_memory_allocated() / (1024.*1024.*1024.)
-    # results['mem_gb'] = 20
+            evals = zip(eval_loader_names, eval_loaders, eval_weights)
+            for name, loader, weights in evals:
+                acc = misc.accuracy(algorithm, loader, weights, device)
+                results[name+'_acc'] = acc
 
-    results_keys = sorted(results.keys())
-    if results_keys != last_results_keys:
-        misc.print_row(results_keys, colwidth=12)
-        last_results_keys = results_keys
-    misc.print_row([results[key] for key in results_keys],
-                   colwidth=12)
+            # results['mem_gb'] = torch.cuda.max_memory_allocated() / (1024.*1024.*1024.)
+            results['mem_gb'] = 20
 
-    results.update({
-        'hparams': hparams,
-        'args': vars(args)
-    })
+            results_keys = sorted(results.keys())
+            if results_keys != last_results_keys:
+                misc.print_row(results_keys, colwidth=12)
+                last_results_keys = results_keys
+            misc.print_row([results[key] for key in results_keys],
+                           colwidth=12)
 
-    epochs_path = os.path.join(args.output_dir, 'results.jsonl')
-    with open(epochs_path, 'a') as f:
-        f.write(json.dumps(results, sort_keys=True) + "\n")
+            results.update({
+                'hparams': hparams,
+                'args': vars(args)
+            })
 
-    algorithm_dict = algorithm.state_dict()
-    start_step = step + 1
-    checkpoint_vals = collections.defaultdict(lambda: [])
+            epochs_path = os.path.join(args.output_dir, 'results.jsonl')
+            with open(epochs_path, 'a') as f:
+                f.write(json.dumps(results, sort_keys=True) + "\n")
 
-    if args.save_model_every_checkpoint:
-        save_checkpoint(f'model_step{step + 1}.pkl')
+            algorithm_dict = algorithm.state_dict()
+            start_step = step + 1
+            checkpoint_vals = collections.defaultdict(lambda: [])
+
+            if args.save_model_every_checkpoint:
+                save_checkpoint(f'model_step{step}.pkl')
 
     save_checkpoint('model.pkl')
 

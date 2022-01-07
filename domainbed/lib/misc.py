@@ -149,17 +149,22 @@ def random_pairs_of_minibatches(minibatches):
 
     return pairs
 
-def accuracy(network, loader, weights, device):
+def accuracy(network, loader, weights, device, no_distill=True):
     correct = 0
     total = 0
     weights_offset = 0
 
     network.eval()
     # with torch.no_grad():
+    train_distillation = True
     for x, y in loader:
         x = x.to(device)
         y = y.to(device)
-        p = network.predict(x)
+        if train_distillation:
+            p = network.predict(x, train_distillation, no_distill).detach()
+            train_distillation = False
+        else:
+            p = network.predict(x, no_distill).detach()
         with torch.no_grad():
             if weights is None:
                 batch_weights = torch.ones(len(x))
@@ -172,6 +177,7 @@ def accuracy(network, loader, weights, device):
             else:
                 correct += (p.argmax(1).eq(y).float() * batch_weights).sum().item()
             total += batch_weights.sum().item()
+        del p
     network.train()
 
     return correct / total

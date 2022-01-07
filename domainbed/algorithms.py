@@ -613,6 +613,15 @@ class DropoutIRM(IRM):
         self.num_dropout_predictions = hparams['num_verifications']
         self.input_shape = input_shape
         self.num_classes = num_classes
+        self.distilled_model = None
+        self.stored_training = []
+        self.num_stored_samples = 4098
+
+    def update(self, minibatches, unlabeled=None):
+        with torch.no_grad():
+            if len(self.stored_training) * self.hparams['batch_size'] < self.num_stored_samples:
+                self.stored_training = self.stored_training + [(x.detach().cpu(), y.detach().cpu()) for x,y in minibatches]
+        return super().update(minibatches, unlabeled)
 
     @staticmethod
     def self_distill(hparams, input_shape, num_classes, trained_model, train_loaders, test_batch, steps, lr, deepness=4, num_confirmations=10, filter_ratio=0.3):
@@ -625,6 +634,7 @@ class DropoutIRM(IRM):
         num_epochs = 10
         current_model = trained_model
         for d in range(deepness):
+            print(d)
             pred_history = []
             pred_logits_history = []
             # x = []
@@ -672,28 +682,29 @@ class DropoutIRM(IRM):
                     pred_logits_history.append((pred_logits))
 
             # filter the top confidence samples from the test data
-            pred_history = torch.stack(pred_history)
-            pred_logits_history = torch.stack(pred_logits_history)
-            pred_variation = pred_history.float().var(axis=0)
+            with torch.no_grad():
+                pred_history = torch.stack(pred_history)
+                pred_logits_history = torch.stack(pred_logits_history)
+                pred_variation = pred_history.float().var(axis=0)
 
-            mean_prediction = torch.mean(pred_logits_history, dim = 0)
-            modal_prediction = torch.mode(pred_history, dim=0).values
+                mean_prediction = torch.mean(pred_logits_history, dim = 0)
+                modal_prediction = torch.mode(pred_history, dim=0).values
 
-            hci = torch.sort(pred_variation.flatten()).indices
-            num_filtered_samples = int(len(hci) * filter_ratio)
+                hci = torch.sort(pred_variation.flatten()).indices
+                num_filtered_samples = int(len(hci) * filter_ratio)
 
-            zero_var_sample_indices = torch.where(pred_variation == 0)[0]
-            if len(zero_var_sample_indices) > num_filtered_samples:
-                hci = zero_var_sample_indices
-                num_filtered_samples = len(zero_var_sample_indices)
+                zero_var_sample_indices = torch.where(pred_variation == 0)[0]
+                if len(zero_var_sample_indices) > num_filtered_samples:
+                    hci = zero_var_sample_indices
+                    num_filtered_samples = len(zero_var_sample_indices)
 
-            new_x = x[hci[:num_filtered_samples]]
-            new_y = modal_prediction[hci[:num_filtered_samples]]
+                new_x = x[hci[:num_filtered_samples]]
+                new_y = modal_prediction[hci[:num_filtered_samples]]
             # new_gt_y = y[hci[:num_filtered_samples]]
 
             # For logging purposes, print the accuracy of the most confident predictions
 
-
+            torch.cuda.empty_cache()
             # train on the top confidence samples
             for step in range(steps):
                 logits = distilled_model(new_x)
@@ -701,6 +712,7 @@ class DropoutIRM(IRM):
                 optimizer.zero_grad()
                 nll.backward()
                 optimizer.step()
+                del logits, nll
                 # if step % 300 == 0:
                 #     # print('=' * 10)
                 #     distilled_model.eval()
@@ -709,18 +721,23 @@ class DropoutIRM(IRM):
 
             # update the current model
             current_model = distilled_model
+            torch.cuda.empty_cache()
             # print(f'Final Test Accuracy: {mean_accuracy(distilled_model(x).detach(), y)}')
             pass
         return current_model
 
-    def predict(self, x):
-        self.network.train()
-        # self distill based on the provided data
-        distilled_model = self.self_distill(self.hparams, self.input_shape, self.num_classes, self.network, None, x, 50, self.hparams['lr']*0.01)
-        self.network.eval()
+    def predict(self, x, train_distillation=False, no_distill=True):
+        if no_distill:
+            return self.network(x)
+        if train_distillation:
+            self.network.train()
+            # self distill based on the provided data
+            distilled_model = self.self_distill(self.hparams, self.input_shape, self.num_classes, self.network, None, x, 50, self.hparams['lr']*0.01)
+            self.network.eval()
+            self.distilled_model = distilled_model
 
         # apply the self distilled model on the data to get the class
-        distilled_model(x)
+        return self.distilled_model(x)
 
 
 class VREx(ERM):
