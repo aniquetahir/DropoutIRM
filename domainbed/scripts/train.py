@@ -12,8 +12,6 @@ import uuid
 import numpy as np
 import PIL
 import torch
-from torch import nn, optim
-import torch.nn.functional as F
 import torchvision
 import torch.utils.data
 
@@ -22,20 +20,6 @@ from domainbed import hparams_registry
 from domainbed import algorithms
 from domainbed.lib import misc
 from domainbed.lib.fast_data_loader import InfiniteDataLoader, FastDataLoader
-
-from domainbed.networks import FeaturizerDropout, Classifier
-
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-def mean_nll(logits, y):
-    return nn.functional.binary_cross_entropy_with_logits(logits, y)
-
-
-# TODO fix this for multiclass classification
-def mean_accuracy(logits, y):
-    pred_class = torch.argmax(logits, dim=1)
-    return (pred_class==y).float().mean()
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Domain generalization')
@@ -173,20 +157,11 @@ if __name__ == "__main__":
         batch_size=hparams['batch_size'],
         num_workers=dataset.N_WORKERS)
         for i, (env, env_weights) in enumerate(uda_splits)
-        # if i in args.test_envs
-    ]
-
-    ood_loader = [InfiniteDataLoader(
-        dataset=env,
-        weights=None,
-        batch_size=hparams['batch_size'],
-        num_workers=dataset.N_WORKERS)
-        for i, (env, env_weights) in enumerate(uda_splits)
-    ]
+        if i in args.test_envs]
 
     eval_loaders = [FastDataLoader(
         dataset=env,
-        batch_size=64,
+        batch_size=4096,
         num_workers=dataset.N_WORKERS)
         for env, _ in (in_splits + out_splits + uda_splits)]
     eval_weights = [None for _, weights in (in_splits + out_splits + uda_splits)]
@@ -215,8 +190,6 @@ if __name__ == "__main__":
     n_steps = args.steps or dataset.N_STEPS
     checkpoint_freq = args.checkpoint_freq or dataset.CHECKPOINT_FREQ
 
-    distilled_model = None
-
     def save_checkpoint(filename):
         if args.skip_model_save:
             return
@@ -226,8 +199,7 @@ if __name__ == "__main__":
             "model_num_classes": dataset.num_classes,
             "model_num_domains": len(dataset) - len(args.test_envs),
             "model_hparams": hparams,
-            "model_dict": algorithm.state_dict(),
-            "distilled_model": None if distilled_model is None else distilled_model.state_dict()
+            "model_dict": algorithm.state_dict()
         }
         torch.save(save_dict, os.path.join(args.output_dir, filename))
 
@@ -262,10 +234,8 @@ if __name__ == "__main__":
                 acc = misc.accuracy(algorithm, loader, weights, device)
                 results[name+'_acc'] = acc
 
-            if device == 'cuda':
-                results['mem_gb'] = torch.cuda.max_memory_allocated() / (1024.*1024.*1024.)
-            else:
-                results['mem_gb'] = 0.
+            # results['mem_gb'] = torch.cuda.max_memory_allocated() / (1024.*1024.*1024.)
+            results['mem_gb'] = 20
 
             results_keys = sorted(results.keys())
             if results_keys != last_results_keys:
@@ -289,23 +259,6 @@ if __name__ == "__main__":
 
             if args.save_model_every_checkpoint:
                 save_checkpoint(f'model_step{step}.pkl')
-
-    # Use the model to find the most confident samples in the test environment
-    # self_distill(hparams, dataset.input_shape, dataset.num_classes, algorithm.network, train_loaders, uda_loaders, n_steps, hparams['lr'] * 0.01)
-    #
-    #
-    # num_conf_iters = hparams['num_confidence_runs']
-    # prediction_history = []
-    #
-    # # get batch of test data
-    # data_batch = [x for x, _ in next(uda_minibatches_iterator)]
-    #
-    # for i in range(prediction_history):
-    #     prediction = algorithm.predict(torch.vstack(data_batch))
-    #     pass
-    #
-    # # Use the most confident samples to train an ERM model
-
 
     save_checkpoint('model.pkl')
 
