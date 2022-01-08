@@ -624,7 +624,7 @@ class DropoutIRM(IRM):
         return super().update(minibatches, unlabeled)
 
     @staticmethod
-    def self_distill(hparams, input_shape, num_classes, trained_model, train_loaders, test_batch, steps, lr, deepness=4, num_confirmations=10, filter_ratio=0.3):
+    def self_distill(hparams, input_shape, num_classes, trained_model, train_loaders, test_batch):#, steps, lr, deepness=4, num_confirmations=10, filter_ratio=0.3):
         # define the current model
         def mean_accuracy(logits, y):
             logits_to_y = torch.argmax(logits, dim=1)
@@ -633,7 +633,7 @@ class DropoutIRM(IRM):
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         num_epochs = 10
         current_model = trained_model
-        for d in range(deepness):
+        for d in range(hparams['distillation_deep']):
             print(d)
             pred_history = []
             pred_logits_history = []
@@ -661,7 +661,7 @@ class DropoutIRM(IRM):
             featurizer = networks.FeaturizerDropout(input_shape, hparams)
             classifier = networks.Classifier(featurizer.n_outputs, num_classes, hparams['nonlinear_classifier'])
             distilled_model = torch.nn.Sequential(featurizer, classifier).to(device) #.cuda()
-            optimizer = torch.optim.Adam(distilled_model.parameters(), lr=lr)
+            optimizer = torch.optim.Adam(distilled_model.parameters(), lr=hparams['distillation_lr'])
 
             # pseudo label the test data
             # x = []
@@ -675,7 +675,7 @@ class DropoutIRM(IRM):
             x = test_batch # torch.vstack(x)
             # y = torch.cat(y)
 
-            for i in range(num_confirmations):
+            for i in range(hparams['num_confirmations']):
                 with torch.no_grad():
                     pred_logits = current_model(x).detach()
                     pred_history.append(torch.argmax(pred_logits, axis=1))
@@ -706,7 +706,7 @@ class DropoutIRM(IRM):
 
             torch.cuda.empty_cache()
             # train on the top confidence samples
-            for step in range(steps):
+            for step in range(hparams['distillation_step']):
                 logits = distilled_model(new_x)
                 nll = F.cross_entropy(logits, new_y)  # mean_nll(logits, new_y)
                 optimizer.zero_grad()
@@ -728,15 +728,18 @@ class DropoutIRM(IRM):
 
     def predict(self, x, train_distillation=False, no_distill=True):
         if no_distill:
+            print("No distill is True")
             return self.network(x)
         if train_distillation:
+            print("Train Distillation is True")
             self.network.train()
             # self distill based on the provided data
-            distilled_model = self.self_distill(self.hparams, self.input_shape, self.num_classes, self.network, None, x, 50, self.hparams['lr']*0.01)
+            distilled_model = self.self_distill(self.hparams, self.input_shape, self.num_classes, self.network, None, x)#, 50, self.hparams['lr']*0.01)
             self.network.eval()
             self.distilled_model = distilled_model
 
         # apply the self distilled model on the data to get the class
+        print("Both are false")
         return self.distilled_model(x)
 
 
