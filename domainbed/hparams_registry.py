@@ -58,10 +58,22 @@ def _hparams(algorithm, dataset, random_seed):
     elif algorithm == "SagNet":
         _hparam('sag_w_adv', 0.1, lambda r: 10**r.uniform(-2, 1))
 
-    elif algorithm == "IRM" or algorithm == "DropoutIRM":
+    elif algorithm == "IRM":
         _hparam('irm_lambda', 1e2, lambda r: 10**r.uniform(-1, 5))
         _hparam('irm_penalty_anneal_iters', 500,
                 lambda r: int(10**r.uniform(0, 4)))
+    elif algorithm == "DropoutIRM":
+        _hparam('irm_lambda', 1e2, lambda r: 10 ** r.uniform(-1, 5))
+        _hparam('irm_penalty_anneal_iters', 500,
+                lambda r: int(10 ** r.uniform(0, 4)))
+        _hparam('mlp_dropout',0.5, lambda r: r.uniform(0,1))
+        _hparam('num_confirmations', 10, lambda r: 10 ** r.uniform(0, 2))
+        _hparam('num_verifications', 10, lambda r: 10 ** r.uniform(0, 2))
+        _hparam('distillation_step', 10, lambda r: 10**r.uniform(0, 3))
+        _hparam('distillation_lr', 1e-3, lambda r: 10**r.uniform(-2, -6))
+        _hparam('distillation_deep', 4, lambda r: int(r.uniform(2, 6)))
+        _hparam('filter_ratio', 0.3, lambda r: r.uniform(0, 1))
+
     elif algorithm == "BranchOOD":
         _hparam('branch_alpha', 100, lambda r: r.uniform(0, 10000))
         _hparam('branch_beta', 1000, lambda r: r.uniform(0, 100000))
