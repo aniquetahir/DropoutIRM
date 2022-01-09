@@ -161,7 +161,7 @@ if __name__ == "__main__":
 
     eval_loaders = [FastDataLoader(
         dataset=env,
-        batch_size=4096,
+        batch_size=2048,
         num_workers=dataset.N_WORKERS)
         for env, _ in (in_splits + out_splits + uda_splits)]
     eval_weights = [None for _, weights in (in_splits + out_splits + uda_splits)]
@@ -199,7 +199,8 @@ if __name__ == "__main__":
             "model_num_classes": dataset.num_classes,
             "model_num_domains": len(dataset) - len(args.test_envs),
             "model_hparams": hparams,
-            "model_dict": algorithm.state_dict()
+            "model_dict": algorithm.state_dict(),
+            "distilled_model": algorithm.distilled_model
         }
         torch.save(save_dict, os.path.join(args.output_dir, filename))
 

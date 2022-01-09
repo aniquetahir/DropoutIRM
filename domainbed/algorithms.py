@@ -691,7 +691,7 @@ class DropoutIRM(IRM):
                 modal_prediction = torch.mode(pred_history, dim=0).values
 
                 hci = torch.sort(pred_variation.flatten()).indices
-                num_filtered_samples = int(len(hci) * filter_ratio)
+                num_filtered_samples = int(len(hci) * hparams['filter_ratio'])
 
                 zero_var_sample_indices = torch.where(pred_variation == 0)[0]
                 if len(zero_var_sample_indices) > num_filtered_samples:
@@ -728,7 +728,7 @@ class DropoutIRM(IRM):
 
     def predict(self, x, train_distillation=False, no_distill=True):
         if no_distill:
-            print("No distill is True")
+            # print("No distill is True")
             return self.network(x)
         if train_distillation:
             print("Train Distillation is True")
